@@ -1,0 +1,31 @@
+{
+  "name": "@pos-bus/admin-web",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm --workspace @pos-bus/shared run build && next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "npm --workspace @pos-bus/shared run build && tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pos-bus/shared": "file:../packages/shared",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.10.4",
+    "lucide-react": "^0.503.0",
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.1",
+    "eslint-config-next": "^16.2.4",
+    "typescript": "^5.8.3"
+  }
+}

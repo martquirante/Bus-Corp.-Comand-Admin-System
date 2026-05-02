@@ -1,0 +1,26 @@
+{
+  "name": "pos-bus-ticketing-admin-system",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Full-stack web admin command center for the POS Bus Ticketing Simulation.",
+  "workspaces": [
+    "frontend",
+    "backend",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:admin\"",
+    "dev:admin": "npm --workspace @pos-bus/admin-web run dev",
+    "dev:api": "npm --workspace @pos-bus/api run dev",
+    "build": "npm --workspace @pos-bus/shared run build && npm --workspace @pos-bus/api run build && npm --workspace @pos-bus/admin-web run build",
+    "lint": "npm --workspace @pos-bus/admin-web run lint",
+    "typecheck": "npm --workspace @pos-bus/shared run build && npm --workspace @pos-bus/api run typecheck && npm --workspace @pos-bus/admin-web run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
