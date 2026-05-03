@@ -1,6 +1,7 @@
 import type { TransactionLog } from "@pos-bus/shared";
 import { extractTransactions } from "./dataTransform.service.js";
 import { firebaseService } from "./firebase.service.js";
+import { supabaseService } from "./supabase.service.js";
 
 export interface TransactionFilters {
   bus?: string;
@@ -15,7 +16,14 @@ const includes = (value: string, needle?: string) =>
 export const transactionService = {
   async getTransactions(filters: TransactionFilters): Promise<TransactionLog[]> {
     const root = await firebaseService.getRootData();
-    return extractTransactions(root)
+    let sqlTransactions: TransactionLog[] = [];
+    try {
+      sqlTransactions = await supabaseService.listTransactions(filters.limit);
+    } catch (error) {
+      console.warn("[transactions] Supabase read skipped.", error);
+    }
+
+    return [...sqlTransactions, ...extractTransactions(root)]
       .filter((tx) => includes(tx.busNumber, filters.bus))
       .filter((tx) => includes(tx.passengerType, filters.type))
       .filter((tx) => includes(tx.route, filters.route))

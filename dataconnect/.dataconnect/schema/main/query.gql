@@ -1,0 +1,638 @@
+extend type Query {
+  """
+  ✨ Look up a single `Bus` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  bus(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Bus_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Bus_FirstRow
+  ): Bus @fdc_generated(from: "Bus", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Employee` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  employee(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Employee_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Employee_FirstRow
+  ): Employee @fdc_generated(from: "Employee", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `FuelLog` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  fuelLog(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: FuelLog_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: FuelLog_FirstRow
+  ): FuelLog @fdc_generated(from: "FuelLog", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `JobOrder` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  jobOrder(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: JobOrder_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: JobOrder_FirstRow
+  ): JobOrder @fdc_generated(from: "JobOrder", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `MaintenanceRecord` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  maintenanceRecord(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: MaintenanceRecord_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: MaintenanceRecord_FirstRow
+  ): MaintenanceRecord @fdc_generated(from: "MaintenanceRecord", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Notification` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  notification(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Notification_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Notification_FirstRow
+  ): Notification @fdc_generated(from: "Notification", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Payment` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  payment(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Payment_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Payment_FirstRow
+  ): Payment @fdc_generated(from: "Payment", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Route` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  route(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Route_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Route_FirstRow
+  ): Route @fdc_generated(from: "Route", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Ticket` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  ticket(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Ticket_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Ticket_FirstRow
+  ): Ticket @fdc_generated(from: "Ticket", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `TicketScan` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  ticketScan(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: TicketScan_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: TicketScan_FirstRow
+  ): TicketScan @fdc_generated(from: "TicketScan", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `Trip` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  trip(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: Trip_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: Trip_FirstRow
+  ): Trip @fdc_generated(from: "Trip", purpose: QUERY_SINGLE)
+  """
+  ✨ Look up a single `User` based on `id`, `key` or `first` and return selected fields (or `null` if not found).
+  """
+  user(
+    """
+    The unique ID of the object.
+    """
+    id: UUID
+
+    """
+    The key used to identify the object.
+    """
+    key: User_Key
+
+    """
+    Fetch the first row based on the filters and ordering.
+    """
+    first: User_FirstRow
+  ): User @fdc_generated(from: "User", purpose: QUERY_SINGLE)
+  """
+  ✨ List `Bus` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  buses(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Bus_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Bus_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Bus_Having
+  ): [Bus!]! @fdc_generated(from: "Bus", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Employee` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  employees(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Employee_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Employee_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Employee_Having
+  ): [Employee!]! @fdc_generated(from: "Employee", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `FuelLog` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  fuelLogs(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: FuelLog_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [FuelLog_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: FuelLog_Having
+  ): [FuelLog!]! @fdc_generated(from: "FuelLog", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `JobOrder` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  jobOrders(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: JobOrder_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [JobOrder_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: JobOrder_Having
+  ): [JobOrder!]! @fdc_generated(from: "JobOrder", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `MaintenanceRecord` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  maintenanceRecords(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: MaintenanceRecord_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [MaintenanceRecord_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: MaintenanceRecord_Having
+  ): [MaintenanceRecord!]! @fdc_generated(from: "MaintenanceRecord", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Notification` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  notifications(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Notification_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Notification_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Notification_Having
+  ): [Notification!]! @fdc_generated(from: "Notification", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Payment` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  payments(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Payment_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Payment_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Payment_Having
+  ): [Payment!]! @fdc_generated(from: "Payment", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Route` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  routes(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Route_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Route_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Route_Having
+  ): [Route!]! @fdc_generated(from: "Route", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Ticket` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  tickets(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Ticket_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Ticket_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Ticket_Having
+  ): [Ticket!]! @fdc_generated(from: "Ticket", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `TicketScan` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  ticketScans(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: TicketScan_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [TicketScan_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: TicketScan_Having
+  ): [TicketScan!]! @fdc_generated(from: "TicketScan", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `Trip` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  trips(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: Trip_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [Trip_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: Trip_Having
+  ): [Trip!]! @fdc_generated(from: "Trip", purpose: QUERY_MULTIPLE)
+  """
+  ✨ List `User` objects in the table and return selected fields, optionally filtered by `where` conditions
+  """
+  users(
+    """
+    Filter condition to narrow down the query results.
+    """
+    where: User_Filter
+
+    """
+    Order the query results by specific fields.
+    """
+    orderBy: [User_Order!]
+
+    """
+    Number of rows to skip before starting to return the results.
+    """
+    offset: Int
+
+    """
+    Maximum number of rows to return (defaults to 100 rows).
+    """
+    limit: Int = 100
+
+    """
+    Set to true to return distinct results.
+    """
+    distinct: Boolean = false
+
+    """
+    Filter condition to apply to the groups of aggregate queries.
+    """
+    having: User_Having
+  ): [User!]! @fdc_generated(from: "User", purpose: QUERY_MULTIPLE)
+}

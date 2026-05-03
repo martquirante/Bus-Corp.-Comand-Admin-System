@@ -1,0 +1,148 @@
+extend type Bus {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Bus", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Bus`.`currentRoute`. It must match the value of `Route`.`id`. See `@ref` for how to customize it.
+  """
+  currentRouteId: UUID @fdc_generated(from: "Bus.currentRoute", purpose: IMPLICIT_REF_FIELD)
+}
+extend type Employee {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Employee", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Employee`.`user`. It must match the value of `User`.`id`. See `@ref` for how to customize it.
+  """
+  userId: UUID @fdc_generated(from: "Employee.user", purpose: IMPLICIT_REF_FIELD)
+}
+extend type FuelLog {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "FuelLog", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `FuelLog`.`bus`. It must match the value of `Bus`.`id`. See `@ref` for how to customize it.
+  """
+  busId: UUID! @fdc_generated(from: "FuelLog.bus", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `FuelLog`.`driver`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  driverId: UUID @fdc_generated(from: "FuelLog.driver", purpose: IMPLICIT_REF_FIELD)
+}
+extend type JobOrder {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "JobOrder", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `JobOrder`.`assignedMechanic`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  assignedMechanicId: UUID @fdc_generated(from: "JobOrder.assignedMechanic", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `JobOrder`.`bus`. It must match the value of `Bus`.`id`. See `@ref` for how to customize it.
+  """
+  busId: UUID! @fdc_generated(from: "JobOrder.bus", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `JobOrder`.`reportedBy`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  reportedById: UUID @fdc_generated(from: "JobOrder.reportedBy", purpose: IMPLICIT_REF_FIELD)
+}
+extend type MaintenanceRecord {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "MaintenanceRecord", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `MaintenanceRecord`.`jobOrder`. It must match the value of `JobOrder`.`id`. See `@ref` for how to customize it.
+  """
+  jobOrderId: UUID! @fdc_generated(from: "MaintenanceRecord.jobOrder", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `MaintenanceRecord`.`mechanic`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  mechanicId: UUID @fdc_generated(from: "MaintenanceRecord.mechanic", purpose: IMPLICIT_REF_FIELD)
+}
+extend type Notification {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Notification", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Notification`.`targetUser`. It must match the value of `User`.`id`. See `@ref` for how to customize it.
+  """
+  targetUserId: UUID @fdc_generated(from: "Notification.targetUser", purpose: IMPLICIT_REF_FIELD)
+}
+extend type Payment {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Payment", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Payment`.`ticket`. It must match the value of `Ticket`.`id`. See `@ref` for how to customize it.
+  """
+  ticketId: UUID! @fdc_generated(from: "Payment.ticket", purpose: IMPLICIT_REF_FIELD)
+}
+extend type Route {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Route", purpose: IMPLICIT_KEY_FIELD)
+}
+extend type Ticket {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Ticket", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Ticket`.`passenger`. It must match the value of `User`.`id`. See `@ref` for how to customize it.
+  """
+  passengerId: UUID @fdc_generated(from: "Ticket.passenger", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Ticket`.`trip`. It must match the value of `Trip`.`id`. See `@ref` for how to customize it.
+  """
+  tripId: UUID @fdc_generated(from: "Ticket.trip", purpose: IMPLICIT_REF_FIELD)
+}
+extend type TicketScan {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "TicketScan", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `TicketScan`.`conductor`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  conductorId: UUID @fdc_generated(from: "TicketScan.conductor", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `TicketScan`.`ticket`. It must match the value of `Ticket`.`id`. See `@ref` for how to customize it.
+  """
+  ticketId: UUID! @fdc_generated(from: "TicketScan.ticket", purpose: IMPLICIT_REF_FIELD)
+}
+extend type Trip {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "Trip", purpose: IMPLICIT_KEY_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Trip`.`bus`. It must match the value of `Bus`.`id`. See `@ref` for how to customize it.
+  """
+  busId: UUID! @fdc_generated(from: "Trip.bus", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Trip`.`conductor`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  conductorId: UUID @fdc_generated(from: "Trip.conductor", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Trip`.`driver`. It must match the value of `Employee`.`id`. See `@ref` for how to customize it.
+  """
+  driverId: UUID @fdc_generated(from: "Trip.driver", purpose: IMPLICIT_REF_FIELD)
+  """
+  ✨ Implicit foreign key field based on `Trip`.`route`. It must match the value of `Route`.`id`. See `@ref` for how to customize it.
+  """
+  routeId: UUID! @fdc_generated(from: "Trip.route", purpose: IMPLICIT_REF_FIELD)
+}
+extend type User {
+  """
+  ✨ Implicit primary key field. It's a UUID column default to a generated new value. See `@table` for how to customize it.
+  """
+  id: UUID! @default(expr: "uuidV4()") @fdc_generated(from: "User", purpose: IMPLICIT_KEY_FIELD)
+}

@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import { AuthProvider } from "./AuthContext";
 import { ThemeProvider } from "./ThemeContext";
 import { LoadingScreen } from "@/components/loading/LoadingScreen";
+import { CriticalAlertProvider } from "@/components/critical-alerts/CriticalAlertProvider";
+import { ChatWidget } from "@/components/messages/ChatWidget";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [booting, setBooting] = useState(true);
@@ -17,8 +19,11 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <AuthProvider>
-        {booting ? <LoadingScreen /> : null}
-        {children}
+        <CriticalAlertProvider>
+          {booting ? <LoadingScreen /> : null}
+          {children}
+          <ChatWidget />
+        </CriticalAlertProvider>
       </AuthProvider>
     </ThemeProvider>
   );

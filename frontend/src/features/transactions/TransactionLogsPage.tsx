@@ -13,10 +13,22 @@ export function TransactionLogsPage() {
   const [bus, setBus] = useState("");
   const [type, setType] = useState("");
   const [route, setRoute] = useState("");
-  const filters = useMemo(() => ({ bus, type, route, limit: 250 }), [bus, type, route]);
-  const loadTransactions = useCallback(() => api.transactions(filters), [filters]);
+  const loadTransactions = useCallback(() => api.transactions({ limit: 500 }), []);
   const transactions = useApiResource(loadTransactions);
-  const rows = transactions.data || [];
+  const allRows = useMemo(() => transactions.data || [], [transactions.data]);
+  const rows = useMemo(
+    () =>
+      allRows.filter((row) => {
+        if (bus && row.busNumber !== bus) return false;
+        if (type && row.passengerType !== type) return false;
+        if (route && row.route !== route) return false;
+        return true;
+      }),
+    [allRows, bus, route, type]
+  );
+  const busOptions = useMemo(() => Array.from(new Set(allRows.map((row) => row.busNumber))).filter(Boolean), [allRows]);
+  const typeOptions = useMemo(() => Array.from(new Set(allRows.map((row) => row.passengerType))).filter(Boolean), [allRows]);
+  const routeOptions = useMemo(() => Array.from(new Set(allRows.map((row) => row.route))).filter(Boolean), [allRows]);
   const totalSales = rows.reduce((sum, row) => sum + row.amount, 0);
 
   const exportCsv = () => {
@@ -63,15 +75,24 @@ export function TransactionLogsPage() {
         <FilterBar>
           <label>
             Bus
-            <input value={bus} onChange={(event) => setBus(event.target.value)} placeholder="BUS 101" />
+            <select value={bus} onChange={(event) => setBus(event.target.value)}>
+              <option value="">All buses</option>
+              {busOptions.map((option) => <option key={option}>{option}</option>)}
+            </select>
           </label>
           <label>
             Passenger type
-            <input value={type} onChange={(event) => setType(event.target.value)} placeholder="Regular" />
+            <select value={type} onChange={(event) => setType(event.target.value)}>
+              <option value="">All passenger types</option>
+              {typeOptions.map((option) => <option key={option}>{option}</option>)}
+            </select>
           </label>
           <label>
             Route
-            <input value={route} onChange={(event) => setRoute(event.target.value)} placeholder="FVR" />
+            <select value={route} onChange={(event) => setRoute(event.target.value)}>
+              <option value="">All routes</option>
+              {routeOptions.map((option) => <option key={option}>{option}</option>)}
+            </select>
           </label>
           <button
             type="button"

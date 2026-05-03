@@ -10,7 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 export function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
-  const [email, setEmail] = useState("admin@posticketing.com");
+  const [email, setEmail] = useState("admin@santrans.com");
   const [password, setPassword] = useState("admin123");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);

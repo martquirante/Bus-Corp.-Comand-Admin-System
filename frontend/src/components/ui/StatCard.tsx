@@ -2,10 +2,11 @@
 
 import type { LucideIcon } from "lucide-react";
 import { motion } from "framer-motion";
+import type { ReactNode } from "react";
 
 type StatCardProps = {
   label: string;
-  value: string;
+  value: ReactNode;
   detail: string;
   tone: "blue" | "green" | "amber" | "red" | "violet";
   icon: LucideIcon;

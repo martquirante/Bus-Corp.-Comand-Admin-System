@@ -25,6 +25,13 @@ export function LoadingScreen() {
           <span>Preparing live operations view</span>
         </div>
       </div>
+      <div className="loading-video-shell" aria-hidden="true">
+        <span className="loading-smoke smoke-one" />
+        <span className="loading-smoke smoke-two" />
+        <video autoPlay muted loop playsInline preload="auto" className="loading-video">
+          <source src="/assets/loading-screen/loading_screen-video.webm" type="video/webm" />
+        </video>
+      </div>
       <div className="loading-route" aria-hidden="true">
         <span className="loading-dot" />
         <span className="loading-line" />

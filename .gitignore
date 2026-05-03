@@ -6,6 +6,10 @@ coverage/
 .env
 .env.local
 .env.*.local
+backend/.env
+frontend/.env.local
+*.pem
+serviceAccountKey.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

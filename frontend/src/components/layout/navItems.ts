@@ -1,11 +1,13 @@
 import {
   BarChart3,
   BusFront,
+  IdCard,
   LayoutDashboard,
   MapPinned,
   ReceiptText,
   Route,
-  ShieldCheck
+  ShieldCheck,
+  UsersRound
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -20,6 +22,8 @@ export const navItems: Array<{
   { href: "/sales-analytics", label: "Sales & Analytics", icon: BarChart3 },
   { href: "/transaction-logs", label: "Transaction Logs", icon: ReceiptText },
   { href: "/route-config", label: "Route Config", icon: Route },
+  { href: "/bus-fleet", label: "Bus Fleet Management", icon: BusFront },
+  { href: "/employees", label: "Employee", icon: IdCard },
   { href: "/admin-tools", label: "Admin Tools", icon: ShieldCheck },
-  { href: "/dashboard", label: "Fleet Desk", icon: BusFront, secondary: true }
+  { href: "/dashboard", label: "Fleet Desk", icon: UsersRound, secondary: true }
 ] as const;

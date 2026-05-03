@@ -13,6 +13,18 @@ import { healthRoutes } from "./routes/health.routes.js";
 import { reportsRoutes } from "./routes/reports.routes.js";
 import { routesRoutes } from "./routes/routes.routes.js";
 import { transactionsRoutes } from "./routes/transactions.routes.js";
+import { legacyRoutes } from "./routes/legacy.routes.js";
+import { notificationsRoutes } from "./routes/notifications.routes.js";
+import { syncRoutes } from "./routes/sync.routes.js";
+import { realtimeRoutes } from "./routes/realtime.routes.js";
+import { criticalAlertsRoutes } from "./routes/criticalAlerts.routes.js";
+import { employeesRoutes } from "./routes/employees.routes.js";
+import { busesRoutes } from "./routes/buses.routes.js";
+import { messagesRoutes } from "./routes/messages.routes.js";
+import { liveMapRoutes } from "./routes/liveMap.routes.js";
+import { expensesRoutes } from "./routes/expenses.routes.js";
+import { analyticsRoutes } from "./routes/analytics.routes.js";
+import { requestLogger } from "./middleware/requestLogger.middleware.js";
 
 export const app = express();
 
@@ -26,6 +38,7 @@ app.use(
 );
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
+app.use(requestLogger);
 app.use(apiRateLimit);
 
 app.use("/api/health", healthRoutes);
@@ -36,6 +49,17 @@ app.use("/api/transactions", transactionsRoutes);
 app.use("/api/routes", routesRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/legacy", legacyRoutes);
+app.use("/api/notifications", notificationsRoutes);
+app.use("/api/sync", syncRoutes);
+app.use("/api/realtime", realtimeRoutes);
+app.use("/api/critical-alerts", criticalAlertsRoutes);
+app.use("/api/employees", employeesRoutes);
+app.use("/api/buses", busesRoutes);
+app.use("/api/messages", messagesRoutes);
+app.use("/api/live-map", liveMapRoutes);
+app.use("/api/expenses", expensesRoutes);
+app.use("/api/analytics", analyticsRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);

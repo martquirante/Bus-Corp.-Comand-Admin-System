@@ -140,6 +140,24 @@ export const demoRootData = {
       addedBy: "System Owner"
     }
   },
+  AssistanceRequests: {
+    assist_001: {
+      busNumber: "BUS 314",
+      requester: "Joel Ramos",
+      reason: "Driver pressed SOS",
+      status: "pending",
+      timestamp: Date.now() - 88000
+    }
+  },
+  messages: {
+    msg_001: {
+      sender: "Dispatch",
+      title: "Route monitoring",
+      message: "Keep monitoring FVR Terminal dispatch spacing during peak hour.",
+      status: "unread",
+      timestamp: Date.now() - 420000
+    }
+  },
   Routes_Forward: {
     route_fwd_01: {
       origin: "FVR Terminal",
@@ -166,6 +184,24 @@ export const demoRootData = {
       destination: "FVR Terminal",
       price: 25,
       distance: 5.8
+    }
+  },
+  AdminRoutes: {
+    "fvr-terminal-to-gma-kamuning": {
+      routeId: "fvr-terminal-to-gma-kamuning",
+      routeName: "FVR Terminal to GMA Kamuning",
+      origin: "FVR Terminal",
+      destination: "GMA Kamuning",
+      direction: "forward",
+      isViceVersa: true,
+      reverseRouteId: "gma-kamuning-to-fvr-terminal",
+      status: "active",
+      mapReferenceUrl: "https://maps.app.goo.gl/afMZornDfTm4Rpzh9",
+      baseFare: 25,
+      farePerKm: 2,
+      price: 25,
+      stops: [],
+      waypoints: []
     }
   },
   Users: {

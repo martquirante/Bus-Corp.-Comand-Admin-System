@@ -1,54 +1,30 @@
-# Architecture
+# POS Bus Admin Architecture
 
-## Scope
+The Web Admin now uses a hybrid data model:
 
-This refactor targets the Web Admin only. The Java/Gradle conductor POS app is not refactored. Its existing Firebase Realtime Database data flow is preserved by keeping the same RTDB paths consumed by the legacy dashboard.
-
-## Workspace
-
-The project is now organized as an npm workspace:
-
-- `frontend`: Next.js, React, TypeScript web admin.
-- `backend`: Express, TypeScript API boundary for secure Firebase Admin SDK access.
-- `packages/shared`: shared types, constants, and Zod validators.
-- `docs`: architecture, Firebase data map, and deployment notes.
-
-The original flat HTML/CSS/JS files were moved to `legacy/web-admin` as reference only. They are no longer the active admin entrypoint.
+- Firebase Realtime Database is the live NoSQL source for POS device status, live bus movement, assistance requests, messages, expenses, legacy fare matrix data, and editable `AdminRoutes`.
+- Supabase PostgreSQL is the structured SQL store for employees, buses, routes, route stops, route waypoints, tickets, payments, expenses, notifications, critical alerts, and sync logs.
+- The Node.js API is the secure bridge. Admin-sensitive frontend requests go through Express before touching Firebase or Supabase.
+- The Next.js admin frontend renders the command center UI and calls the backend API.
 
 ## Data Flow
 
-1. Admin signs in through `POST /api/auth/session`.
-2. The frontend stores a local session token and calls the API.
-3. The API verifies the session through middleware.
-4. Services read or write Firebase using the Firebase Admin SDK.
-5. Controllers return a consistent `{ data, source, generatedAt }` envelope.
+```mermaid
+flowchart LR
+  Admin["Web Admin (Next.js)"] --> API["Express API"]
+  API --> Firebase["Firebase RTDB live paths"]
+  API --> Supabase["Supabase PostgreSQL structured tables"]
+  Firebase --> API
+  API --> Admin
+```
 
-When Firebase Admin credentials are missing locally, read endpoints use separated demo data from `backend/src/services/demoData.ts`. Write endpoints require Firebase Admin configuration so local preview cannot accidentally mutate a mock source and hide production issues.
+## Runtime Folders
 
-## Frontend
+- `frontend/` contains the Next.js command center.
+- `backend/` contains Express routes, Firebase Admin/RTDB REST access, Supabase access, sync services, validation, and middleware.
+- `packages/shared/` contains shared TypeScript types, constants, and validators.
+- `legacy/web-admin/` is retained only as reference for old Firebase behavior.
 
-The admin UI is split into feature pages:
+## Important Rule
 
-- Dashboard overview
-- Live Fleet Map
-- Sales & Analytics
-- Transaction Logs
-- Route Config
-- Admin Tools
-- Login
-
-Reusable components include `Sidebar`, `Topbar`, `StatCard`, `ChartCard`, `DataTable`, `ThemeToggle`, `LoadingScreen`, `BusMarker`, `MapControls`, `AlertPanel`, and `FilterBar`.
-
-Light and dark modes are handled by `ThemeProvider`, stored in `localStorage`, and initialized from system preference on first load.
-
-## Backend
-
-The API is structured by route/controller/service layers:
-
-- `routes`: URL composition and middleware.
-- `controllers`: request parsing and response envelopes.
-- `services`: Firebase reads, writes, transforms, and audit logging.
-- `middleware`: auth, role checks, validation, errors, rate limiting.
-- `config`: environment and Firebase Admin initialization.
-
-Sensitive Firebase Admin credentials are only read by `backend`.
+`Routes_Forward` and `Routes_Reverse` are legacy fare matrix/reference paths only. Production Live Map and Route Config use `AdminRoutes` and/or Supabase `route_waypoints` for route lines.

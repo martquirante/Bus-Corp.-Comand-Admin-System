@@ -40,7 +40,7 @@ export function Sidebar() {
       <div className="sidebar-ticket">
         <span>Operator</span>
         <strong>{session?.user.fullName || "Admin User"}</strong>
-        <small>{session?.user.role || "SuperAdmin"} online</small>
+        <small>{session?.user.role === "SuperAdmin" ? "Owner/Admin" : session?.user.role || "Admin"} online</small>
       </div>
 
       <button type="button" className="logout-button" onClick={logout}>

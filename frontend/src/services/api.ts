@@ -1,19 +1,60 @@
 import type {
   AdminAccount,
   ApiEnvelope,
+  BusFleetRecord,
+  ChatConversation,
+  ChatMessage,
+  CriticalAlert,
+  DashboardSummary,
   DashboardStats,
+  EmployeeRecord,
   FleetBus,
+  LegacyAssistanceRequest,
+  LegacyMessage,
+  LegacyNotification,
   RevenueReport,
   RouteConfig,
   TransactionLog
 } from "@pos-bus/shared";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000/api";
+const normalizeApiBaseUrl = (value?: string) => {
+  const base = (value || "http://localhost:5000").replace(/\/+$/, "");
+  return base.endsWith("/api") ? base : `${base}/api`;
+};
+
+const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
 const SESSION_KEY = "posBusAdminSession";
 
 type SessionPayload = {
   token: string;
   user: AdminAccount;
+};
+
+type HealthPayload = {
+  status: "ok";
+  service: string;
+  firebase: "connected" | "rtdb-rest" | "not-configured";
+  supabase: "connected" | "not-configured" | "error";
+  supabaseMode: "service-role" | "postgres" | "not-configured";
+  currentMode: string;
+  uptime: number;
+};
+
+type SqlSyncStatus = {
+  configured: boolean;
+  status: string;
+  mode: string;
+  target: string;
+  liveSource: string;
+  supportedTables: string[];
+};
+
+type SqlSyncResult = {
+  synced: boolean;
+  reason?: string;
+  snapshotId?: string;
+  createdAt?: string;
+  summary: Record<string, unknown>;
 };
 
 const getToken = () => {
@@ -27,6 +68,8 @@ const getToken = () => {
     return "";
   }
 };
+
+export const getSessionToken = getToken;
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T>> {
   const token = getToken();
@@ -50,8 +93,23 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelop
 }
 
 export const sessionStorageKey = SESSION_KEY;
+export const apiBaseUrl = API_BASE_URL;
 
 export const api = {
+  async health() {
+    return apiFetch<HealthPayload>("/health");
+  },
+
+  async syncStatus() {
+    return apiFetch<SqlSyncStatus>("/sync/status");
+  },
+
+  async syncRealtimeToSql() {
+    return apiFetch<SqlSyncResult>("/sync/firebase-to-supabase", {
+      method: "POST"
+    });
+  },
+
   async login(email: string, password: string) {
     return apiFetch<SessionPayload>("/auth/session", {
       method: "POST",
@@ -61,6 +119,14 @@ export const api = {
 
   async stats() {
     return apiFetch<DashboardStats>("/dashboard/stats");
+  },
+
+  async getDashboardSummary() {
+    return apiFetch<DashboardSummary>("/dashboard/summary");
+  },
+
+  async dashboard() {
+    return apiFetch<DashboardSummary>("/dashboard");
   },
 
   async fleet() {
@@ -79,6 +145,32 @@ export const api = {
     return apiFetch<RouteConfig[]>(`/routes${direction ? `?direction=${direction}` : ""}`);
   },
 
+  async getRoute(id: string) {
+    return apiFetch<RouteConfig | null>(`/routes/${encodeURIComponent(id)}`);
+  },
+
+  async getRouteWaypoints(id: string) {
+    return apiFetch<NonNullable<RouteConfig["waypoints"]>>(`/routes/${encodeURIComponent(id)}/waypoints`);
+  },
+
+  async getRouteStops(id: string) {
+    return apiFetch<NonNullable<RouteConfig["stops"]>>(`/routes/${encodeURIComponent(id)}/stops`);
+  },
+
+  async syncRouteToSupabase(id: string) {
+    return apiFetch<Record<string, unknown>>(`/routes/${encodeURIComponent(id)}/sync-to-supabase`, {
+      method: "POST"
+    });
+  },
+
+  async getLegacyRoutesForward() {
+    return apiFetch<RouteConfig[]>("/routes/legacy/forward");
+  },
+
+  async getLegacyRoutesReverse() {
+    return apiFetch<RouteConfig[]>("/routes/legacy/reverse");
+  },
+
   async createRoute(payload: Omit<RouteConfig, "id">) {
     return apiFetch<RouteConfig>("/routes", {
       method: "POST",
@@ -93,8 +185,107 @@ export const api = {
     });
   },
 
+  async updateRouteStatus(id: string, status: RouteConfig["status"]) {
+    return apiFetch<RouteConfig>(`/routes/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status })
+    });
+  },
+
+  async getAssistanceRequests() {
+    return apiFetch<Record<string, LegacyAssistanceRequest>>("/legacy/assistance-requests");
+  },
+
+  async getConfig() {
+    return apiFetch<Record<string, unknown>>("/legacy/config");
+  },
+
+  async getExpenses() {
+    return apiFetch<Record<string, unknown>>("/legacy/expenses");
+  },
+
+  async expenses() {
+    return apiFetch<Record<string, unknown>>("/expenses");
+  },
+
+  async createExpense(payload: Record<string, unknown>) {
+    return apiFetch<Record<string, unknown>>("/expenses", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async getPosDevices() {
+    return apiFetch<Record<string, unknown>>("/legacy/pos-devices");
+  },
+
+  async getRoutesForward() {
+    return apiFetch<Record<string, unknown>>("/legacy/routes-forward");
+  },
+
+  async getRoutesReverse() {
+    return apiFetch<Record<string, unknown>>("/legacy/routes-reverse");
+  },
+
+  async getMessages() {
+    return apiFetch<Record<string, LegacyMessage>>("/legacy/messages");
+  },
+
+  async getNotifications() {
+    return apiFetch<LegacyNotification[]>("/notifications");
+  },
+
+  async getUnreadNotificationCount() {
+    return apiFetch<{ count: number }>("/notifications/unread-count");
+  },
+
+  async getCriticalAlerts() {
+    return apiFetch<CriticalAlert[]>("/critical-alerts");
+  },
+
+  async getActiveCriticalAlerts() {
+    return apiFetch<CriticalAlert[]>("/critical-alerts/active");
+  },
+
+  async acknowledgeCriticalAlert(id: string) {
+    return apiFetch<{ id: string; acknowledgedAt: number; acknowledgedBy: string }>(
+      `/critical-alerts/${encodeURIComponent(id)}/acknowledge`,
+      { method: "PATCH" }
+    );
+  },
+
+  async resolveCriticalAlert(id: string) {
+    return apiFetch<{ id: string; resolvedAt: number; resolvedBy: string }>(
+      `/critical-alerts/${encodeURIComponent(id)}/resolve`,
+      { method: "PATCH" }
+    );
+  },
+
+  async dismissCriticalAlert(id: string) {
+    return apiFetch<{ id: string; dismissedAt: number; dismissedBy: string }>(
+      `/critical-alerts/${encodeURIComponent(id)}/dismiss`,
+      { method: "PATCH" }
+    );
+  },
+
+  async markNotificationRead(id: string) {
+    return apiFetch<{ id: string; read: true }>(`/notifications/${encodeURIComponent(id)}/read`, {
+      method: "PATCH"
+    });
+  },
+
+  async markAllNotificationsRead() {
+    return apiFetch<{ updated: number }>("/notifications/read-all", {
+      method: "PATCH"
+    });
+  },
+
   async revenueReport() {
     return apiFetch<RevenueReport[]>("/reports/revenue");
+  },
+
+  async analyticsSummary() {
+    return apiFetch<Record<string, unknown>>("/analytics/summary");
   },
 
   async adminAccounts() {
@@ -111,6 +302,57 @@ export const api = {
   async patchAdmin(id: string, payload: Partial<AdminAccount>) {
     return apiFetch<AdminAccount>(`/admin/accounts/${id}`, {
       method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async employees() {
+    return apiFetch<EmployeeRecord[]>("/employees");
+  },
+
+  async createEmployee(payload: Partial<EmployeeRecord>) {
+    return apiFetch<EmployeeRecord>("/employees", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async patchEmployee(id: string, payload: Partial<EmployeeRecord>) {
+    return apiFetch<EmployeeRecord>(`/employees/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async buses() {
+    return apiFetch<BusFleetRecord[]>("/buses");
+  },
+
+  async createBus(payload: Partial<BusFleetRecord>) {
+    return apiFetch<BusFleetRecord>("/buses", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async patchBus(id: string, payload: Partial<BusFleetRecord>) {
+    return apiFetch<BusFleetRecord>(`/buses/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async chatConversations() {
+    return apiFetch<ChatConversation[]>("/messages/conversations");
+  },
+
+  async chatMessages(conversationId: string) {
+    return apiFetch<ChatMessage[]>(`/messages/conversations/${encodeURIComponent(conversationId)}`);
+  },
+
+  async sendChatMessage(conversationId: string, payload: Partial<ChatMessage>) {
+    return apiFetch<ChatMessage>(`/messages/conversations/${encodeURIComponent(conversationId)}/send`, {
+      method: "POST",
       body: JSON.stringify(payload)
     });
   }

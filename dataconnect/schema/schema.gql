@@ -1,0 +1,218 @@
+enum UserRole {
+  ADMIN
+  CONDUCTOR
+  DRIVER
+  INSPECTOR
+  MECHANIC
+  PASSENGER
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum BusType {
+  AIRCON
+  ORDINARY
+}
+
+enum BusStatus {
+  AVAILABLE
+  IN_SERVICE
+  MAINTENANCE
+  OUT_OF_SERVICE
+}
+
+enum TripStatus {
+  SCHEDULED
+  BOARDING
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum TicketStatus {
+  ACTIVE
+  USED
+  CANCELLED
+  EXPIRED
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  EMERGENCY
+}
+
+enum JobOrderPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum JobOrderStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+type User @table {
+  fullName: String!
+  email: String!
+  role: UserRole!
+  status: AccountStatus!
+  temporaryPassword: Boolean!
+  firebaseUid: String
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Employee @table {
+  user: User
+  employeeNo: String!
+  fullName: String!
+  role: UserRole!
+  phone: String
+  address: String
+  salaryRate: Float
+  salaryType: String
+  dateHired: Date
+  status: AccountStatus!
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Route @table {
+  routeName: String!
+  origin: String!
+  destination: String!
+  isViceVersa: Boolean!
+  distanceKm: Float
+  status: AccountStatus!
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Bus @table {
+  busNo: String!
+  plateNo: String
+  busType: BusType!
+  seatCapacity: Int!
+  standingCapacity: Int!
+  status: BusStatus!
+  currentRoute: Route
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Trip @table {
+  bus: Bus!
+  route: Route!
+  driver: Employee
+  conductor: Employee
+  status: TripStatus!
+  departureTime: Timestamp
+  arrivalTime: Timestamp
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Ticket @table {
+  ticketNo: String!
+  trip: Trip
+  passenger: User
+  passengerName: String
+  origin: String!
+  destination: String!
+  fare: Float!
+  paymentMethod: PaymentMethod!
+  paymentStatus: PaymentStatus!
+  ticketStatus: TicketStatus!
+  qrCode: String
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type TicketScan @table {
+  ticket: Ticket!
+  conductor: Employee
+  scanTime: Timestamp!
+  scanResult: String!
+  remarks: String
+  createdAt: Timestamp!
+}
+
+type Payment @table {
+  ticket: Ticket!
+  amount: Float!
+  paymentMethod: PaymentMethod!
+  paymentStatus: PaymentStatus!
+  referenceNumber: String
+  paidAt: Timestamp
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+}
+
+type Notification @table {
+  title: String!
+  message: String!
+  type: NotificationType!
+  targetRole: UserRole
+  targetUser: User
+  isRead: Boolean!
+  createdAt: Timestamp!
+}
+
+type FuelLog @table {
+  bus: Bus!
+  driver: Employee
+  liters: Float!
+  amount: Float!
+  gasStation: String
+  receiptImageUrl: String
+  remarks: String
+  createdAt: Timestamp!
+}
+
+type JobOrder @table {
+  bus: Bus!
+  reportedBy: Employee
+  assignedMechanic: Employee
+  issueTitle: String!
+  issueDescription: String
+  priority: JobOrderPriority!
+  status: JobOrderStatus!
+  repairNotes: String
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  completedAt: Timestamp
+}
+
+type MaintenanceRecord @table {
+  jobOrder: JobOrder!
+  mechanic: Employee
+  workDone: String!
+  partsUsed: String
+  cost: Float
+  completedAt: Timestamp
+  createdAt: Timestamp!
+}
