@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { isFirebaseReady } from "../config/firebase.js";
-import { env } from "../config/env.js";
+import { authModeLabel, env } from "../config/env.js";
 import { firebaseService } from "../services/firebase.service.js";
 import { supabaseService } from "../services/supabase.service.js";
 
@@ -16,6 +16,7 @@ healthRoutes.get("/", async (_req, res) => {
       firebase: isFirebaseReady ? "connected" : env.FIREBASE_DATABASE_URL ? "rtdb-rest" : "not-configured",
       supabase: supabase.status,
       supabaseMode: supabase.mode,
+      auth: authModeLabel(),
       currentMode: "firebase-live-supabase-structured",
       uptime: process.uptime()
     },

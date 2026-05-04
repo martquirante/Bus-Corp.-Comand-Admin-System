@@ -4,9 +4,10 @@ import type {
   LegacyMessage
 } from "@pos-bus/shared";
 import { firebasePaths } from "@pos-bus/shared";
-import { buildDashboardStats, extractExpensesTotal, extractFleet } from "./dataTransform.service.js";
+import { buildDashboardStats, extractFleet } from "./dataTransform.service.js";
 import { firebaseService } from "./firebase.service.js";
 import { notificationService } from "./notification.service.js";
+import { supabaseService } from "./supabase.service.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -57,15 +58,36 @@ const isPending = (status: string) => {
   return ["pending", "open", "new", "active", "unread"].some((word) => normalized.includes(word));
 };
 
+const officialStatsForRoot = async (root: AnyRecord) => {
+  const liveStats = buildDashboardStats(root);
+
+  try {
+    return await supabaseService.getOfficialDashboardStats(liveStats);
+  } catch (error) {
+    console.warn("[dashboard] Supabase official stats unavailable.", error);
+    return {
+      ...liveStats,
+      totalRevenue: 0,
+      totalExpenses: 0,
+      netProfit: 0,
+      totalPassengers: 0,
+      cashTotal: 0,
+      gcashTotal: 0,
+      totalTransactions: 0,
+      lastUpdated: new Date().toISOString()
+    };
+  }
+};
+
 export const dashboardService = {
   async getStats() {
     const root = await firebaseService.getRootData();
-    return buildDashboardStats(root);
+    return officialStatsForRoot(root);
   },
 
   async getSummary(): Promise<DashboardSummary> {
     const root = await firebaseService.getRootData();
-    const stats = buildDashboardStats(root);
+    const stats = await officialStatsForRoot(root);
     const fleet = extractFleet(root);
     const assistance = recentFirst(
       toArray(root[firebasePaths.assistanceRequests], normalizeAssistance),
@@ -84,7 +106,7 @@ export const dashboardService = {
       pendingAssistanceRequestCount: assistance.filter((request) => isPending(request.status)).length,
       totalMessages: countMap(root[firebasePaths.messages]),
       recentMessages: messages,
-      expenseTotal: extractExpensesTotal(root),
+      expenseTotal: stats.totalExpenses,
       routeCount,
       recentAssistanceRequests: assistance,
       deviceHealth: fleet,

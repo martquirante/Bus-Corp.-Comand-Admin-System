@@ -36,6 +36,7 @@ type HealthPayload = {
   firebase: "connected" | "rtdb-rest" | "not-configured";
   supabase: "connected" | "not-configured" | "error";
   supabaseMode: "service-role" | "postgres" | "not-configured";
+  auth: "dev-bypass" | "protected";
   currentMode: string;
   uptime: number;
 };

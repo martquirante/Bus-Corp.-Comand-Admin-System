@@ -13,5 +13,5 @@ syncRoutes.post("/realtime-to-sql", asyncHandler(syncController.syncRealtimeToSq
 syncRoutes.post("/run-once", asyncHandler(syncController.syncRealtimeToSql));
 syncRoutes.post("/routes", asyncHandler(syncController.syncRealtimeToSql));
 syncRoutes.post("/expenses", asyncHandler(syncController.syncRealtimeToSql));
-syncRoutes.post("/transactions", asyncHandler(syncController.syncRealtimeToSql));
+syncRoutes.post("/transactions", asyncHandler(syncController.syncTransactions));
 syncRoutes.post("/critical-alerts", asyncHandler(syncController.syncRealtimeToSql));

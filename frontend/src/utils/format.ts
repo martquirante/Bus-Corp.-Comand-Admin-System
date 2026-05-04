@@ -2,6 +2,7 @@ export const formatPeso = (value: number) =>
   new Intl.NumberFormat("en-PH", {
     style: "currency",
     currency: "PHP",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(value || 0);
 
@@ -9,6 +10,11 @@ export const formatNumber = (value: number) =>
   new Intl.NumberFormat("en-PH", {
     maximumFractionDigits: 0
   }).format(value || 0);
+
+export const formatCoordinate = (value: number | string | null | undefined) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(6) : "N/A";
+};
 
 export const formatDateTime = (value: number | string | null | undefined) => {
   if (!value) return "No timestamp";

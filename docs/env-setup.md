@@ -6,6 +6,8 @@ Create `backend/.env` locally:
 
 ```env
 PORT=5000
+AUTH_MODE=dev
+REQUIRE_FIREBASE_ID_TOKEN=false
 ADMIN_WEB_ORIGIN=http://localhost:3000
 
 FIREBASE_PROJECT_ID=santranspos
@@ -17,6 +19,8 @@ SUPABASE_URL=https://qortxdtzoeprjzsijtwn.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_DB_URL=postgresql://postgres:<DB_PASSWORD>@db.qortxdtzoeprjzsijtwn.supabase.co:5432/postgres
 ```
+
+`AUTH_MODE=dev` and `REQUIRE_FIREBASE_ID_TOKEN=false` allow local read endpoints to load without a browser Firebase ID token. Mutation endpoints still require a backend session or verified token.
 
 ## Frontend
 

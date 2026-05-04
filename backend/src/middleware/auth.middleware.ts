@@ -1,6 +1,18 @@
 import type { NextFunction, Request, Response } from "express";
+import { canBypassReadAuth } from "../config/env.js";
 import { firebaseAdmin, isFirebaseReady } from "../config/firebase.js";
 import { sessionToken } from "../utils/sessionToken.js";
+
+const readMethods = new Set(["GET", "HEAD", "OPTIONS"]);
+
+const devBypassUser = {
+  uid: "dev-admin",
+  id: "dev-admin",
+  fullName: "Local Dev Admin",
+  email: "dev.admin@local",
+  role: "SuperAdmin" as const,
+  status: "active" as const
+};
 
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.header("authorization") || "";
@@ -10,6 +22,22 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   if (backendSession) {
     req.user = backendSession;
     next();
+    return;
+  }
+
+  if (canBypassReadAuth() && readMethods.has(req.method)) {
+    req.user = devBypassUser;
+    next();
+    return;
+  }
+
+  if (canBypassReadAuth() && !token) {
+    res.status(401).json({
+      error: {
+        code: "ADMIN_SESSION_REQUIRED",
+        message: "This action needs an admin session. Dev bypass only applies to read-only data."
+      }
+    });
     return;
   }
 

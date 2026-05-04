@@ -1,5 +1,22 @@
 # Realtime Dashboard
 
+## Accounting Source
+
+Official dashboard accounting comes from Supabase PostgreSQL:
+
+- Total Revenue: Supabase `payments.amount`
+- Transactions: Supabase `tickets` count
+- Net Profit: Supabase `payments.amount` minus Supabase `expenses.amount`
+
+Firebase RTDB remains the live operational source:
+
+- Active buses
+- GPS availability
+- emergency/SOS status
+- current bus session counters
+
+`POS_Devices.LiveStatus.totalCash` and `totalGcash` are not official total revenue. They are Live Session Revenue for the current device/bus session.
+
 The dashboard uses a backend-supported realtime flow:
 
 ```text

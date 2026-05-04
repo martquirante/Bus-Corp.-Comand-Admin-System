@@ -9,12 +9,13 @@ type StreamHandlers<T> = {
 };
 
 const streamUrl = (path: string) => {
-  const token = encodeURIComponent(getSessionToken());
-  return `${apiBaseUrl}${path}${path.includes("?") ? "&" : "?"}token=${token}`;
+  const token = getSessionToken();
+  if (!token) return `${apiBaseUrl}${path}`;
+  return `${apiBaseUrl}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
 };
 
 const createStream = <T>(path: string, eventName: string, handlers: StreamHandlers<T>) => {
-  if (typeof window === "undefined" || !getSessionToken()) {
+  if (typeof window === "undefined") {
     return () => undefined;
   }
 

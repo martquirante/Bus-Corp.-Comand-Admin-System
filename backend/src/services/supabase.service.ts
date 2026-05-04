@@ -1,8 +1,10 @@
 import type {
   BusFleetRecord,
   CriticalAlert,
+  DashboardStats,
   EmployeeRecord,
   LegacyNotification,
+  RevenueReport,
   RouteConfig,
   RouteWaypoint,
   TransactionLog
@@ -19,6 +21,7 @@ type TableName =
   | "routes"
   | "route_stops"
   | "route_waypoints"
+  | "trips"
   | "tickets"
   | "payments"
   | "expenses"
@@ -42,6 +45,7 @@ const tableNames = new Set<TableName>([
   "routes",
   "route_stops",
   "route_waypoints",
+  "trips",
   "tickets",
   "payments",
   "expenses",
@@ -64,6 +68,49 @@ const toTimestamp = (value: unknown) => {
 };
 
 const safeRouteStatus = (status?: string) => (status === "archived" ? "inactive" : status || "active");
+
+const toIsoDate = (value: unknown) => {
+  const timestamp = toTimestamp(value);
+  return new Date(timestamp).toISOString();
+};
+
+const safeKey = (value: string) =>
+  value
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120);
+
+const normalizePaymentMethod = (value: unknown) => {
+  const method = String(value || "").toLowerCase();
+  if (method === "cash" || method === "gcash" || method === "online") return method;
+  return "other";
+};
+
+const canonicalTicketKey = (row: AnyRecord) =>
+  String(row.ticket_no || row.firebase_ticket_key || row.id)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+const prefersTicketRow = (candidate: AnyRecord, current: AnyRecord) => {
+  const candidateHasFullFirebaseKey = String(candidate.firebase_ticket_key || "").includes(":");
+  const currentHasFullFirebaseKey = String(current.firebase_ticket_key || "").includes(":");
+  if (candidateHasFullFirebaseKey !== currentHasFullFirebaseKey) return candidateHasFullFirebaseKey;
+
+  return toTimestamp(candidate.updated_at || candidate.created_at) >= toTimestamp(current.updated_at || current.created_at);
+};
+
+const dedupeTicketRows = <T extends AnyRecord>(rows: T[]) => {
+  const byKey = new Map<string, T>();
+
+  rows.forEach((row) => {
+    const key = canonicalTicketKey(row);
+    const current = byKey.get(key);
+    if (!current || prefersTicketRow(row, current)) byKey.set(key, row);
+  });
+
+  return [...byKey.values()];
+};
 
 const employeeFromRow = (row: AnyRecord): EmployeeRecord => ({
   id: String(row.id),
@@ -152,8 +199,8 @@ const transactionFromTicket = (row: AnyRecord): TransactionLog => ({
   route: row.route_name || `${row.origin || "N/A"} -> ${row.destination || "N/A"}`,
   passengerType: row.passenger_type || "regular",
   passengerCount: toNumber(row.passenger_count, 1),
-  paymentMethod: row.payment_method || "unknown",
-  amount: toNumber(row.fare),
+  paymentMethod: row.official_payment_method || row.payment_method || "unknown",
+  amount: toNumber(row.official_amount ?? row.fare),
   tripId: row.trip_id || undefined,
   deviceId: row.firebase_ticket_key || undefined
 });
@@ -396,24 +443,182 @@ const replaceRouteChildren = async (routeId: string, route: RouteConfig) => {
 };
 
 const insertSyncLog = async (payload: AnyRecord) => {
+  const row = {
+    source_path: payload.source_path,
+    source_key: payload.source_key || null,
+    target_table: payload.target_table || null,
+    sync_status: payload.sync_status || "success",
+    error_message: payload.error_message || null,
+    synced_at: payload.synced_at || new Date().toISOString()
+  };
+
   if (supabaseAdmin) {
-    await supabaseAdmin.from("firebase_sync_logs").insert(payload);
+    const { error } = await supabaseAdmin
+      .from("firebase_sync_logs")
+      .upsert(row, { onConflict: "source_path,source_key" });
+    if (error) throw new AppError(502, "SUPABASE_SYNC_LOG_FAILED", error.message);
     return;
   }
 
   if (supabasePool) {
     await supabasePool.query(
-      "insert into public.firebase_sync_logs (source_path, source_key, target_table, sync_status, error_message, synced_at) values ($1,$2,$3,$4,$5,$6)",
+      `
+        insert into public.firebase_sync_logs
+          (source_path, source_key, target_table, sync_status, error_message, synced_at)
+        values
+          ($1,$2,$3,$4,$5,$6)
+        on conflict (source_path, source_key) do update set
+          target_table = excluded.target_table,
+          sync_status = excluded.sync_status,
+          error_message = excluded.error_message,
+          synced_at = excluded.synced_at
+      `,
       [
-        payload.source_path,
-        payload.source_key || null,
-        payload.target_table || null,
-        payload.sync_status || "success",
-        payload.error_message || null,
-        payload.synced_at || new Date().toISOString()
+        row.source_path,
+        row.source_key,
+        row.target_table,
+        row.sync_status,
+        row.error_message,
+        row.synced_at
       ]
     );
   }
+};
+
+const officialPaymentRows = async () =>
+  rowsFromTable<AnyRecord>("payments", { order: { column: "created_at", ascending: false } });
+
+const officialTicketRows = async (limit = 1000) =>
+  rowsFromTable<AnyRecord>("tickets", { order: { column: "created_at", ascending: false }, limit });
+
+const queryRows = async <T extends AnyRecord>(sql: string, values: unknown[] = []) => {
+  if (!supabasePool) return [];
+  const result = await supabasePool.query<T>(sql, values);
+  return result.rows;
+};
+
+const upsertTrip = async (tripNo: string, passengerCount: number, timestamp: string) => {
+  const rows = await queryRows<{ id: string }>(
+    `
+      insert into public.trips
+        (trip_no, status, departure_time, passenger_count, standing_count, firebase_trip_key, created_at, updated_at)
+      values
+        ($1, 'completed', $2, $3, 0, $1, $2, now())
+      on conflict (trip_no) do update set
+        passenger_count = excluded.passenger_count,
+        updated_at = now()
+      returning id
+    `,
+    [tripNo, timestamp, passengerCount]
+  );
+
+  return rows[0]?.id || null;
+};
+
+const upsertTicket = async (tx: TransactionLog, ticketNo: string, tripId: string | null, timestamp: string) => {
+  const existing = await queryRows<{ id: string }>("select id from public.tickets where firebase_ticket_key = $1 limit 1", [tx.id]);
+  if (existing[0]?.id) {
+    const rows = await queryRows<{ id: string }>(
+      `
+        update public.tickets set
+          trip_id = $2,
+          passenger_type = $3,
+          origin = $4,
+          destination = $5,
+          fare = $6,
+          payment_method = $7,
+          payment_status = 'paid',
+          ticket_status = 'active',
+          updated_at = now()
+        where id = $1
+        returning id
+      `,
+      [
+        existing[0].id,
+        tripId,
+        tx.passengerType || "regular",
+        tx.origin,
+        tx.destination,
+        tx.amount,
+        normalizePaymentMethod(tx.paymentMethod)
+      ]
+    );
+
+    return rows[0]?.id || existing[0].id;
+  }
+
+  const rows = await queryRows<{ id: string }>(
+    `
+      insert into public.tickets
+        (ticket_no, trip_id, passenger_type, origin, destination, fare, payment_method, payment_status,
+         ticket_status, firebase_ticket_key, created_at, updated_at)
+      values
+        ($1, $2, $3, $4, $5, $6, $7, 'paid', 'active', $8, $9, now())
+      on conflict (ticket_no) do update set
+        trip_id = excluded.trip_id,
+        passenger_type = excluded.passenger_type,
+        origin = excluded.origin,
+        destination = excluded.destination,
+        fare = excluded.fare,
+        payment_method = excluded.payment_method,
+        payment_status = excluded.payment_status,
+        firebase_ticket_key = excluded.firebase_ticket_key,
+        updated_at = now()
+      returning id
+    `,
+    [
+      ticketNo,
+      tripId,
+      tx.passengerType || "regular",
+      tx.origin,
+      tx.destination,
+      tx.amount,
+      normalizePaymentMethod(tx.paymentMethod),
+      tx.id,
+      timestamp
+    ]
+  );
+
+  return rows[0]?.id || null;
+};
+
+const upsertPayment = async (tx: TransactionLog, ticketId: string | null, referenceNumber: string, timestamp: string) => {
+  const existing = await queryRows<{ id: string }>("select id from public.payments where firebase_payment_key = $1 limit 1", [referenceNumber]);
+  if (existing[0]?.id) {
+    await queryRows(
+      `
+        update public.payments set
+          ticket_id = $2,
+          amount = $3,
+          payment_method = $4,
+          payment_status = 'paid',
+          paid_at = $5,
+          updated_at = now()
+        where id = $1
+      `,
+      [existing[0].id, ticketId, tx.amount, normalizePaymentMethod(tx.paymentMethod), timestamp]
+    );
+    return;
+  }
+
+  await queryRows(
+    `
+      insert into public.payments
+        (ticket_id, amount, payment_method, payment_status, reference_number, paid_at,
+         firebase_payment_key, created_at, updated_at)
+      values
+        ($1, $2, $3, 'paid', $4, $5, $4, $5, now())
+      on conflict (reference_number) do update set
+        ticket_id = excluded.ticket_id,
+        amount = excluded.amount,
+        payment_method = excluded.payment_method,
+        payment_status = excluded.payment_status,
+        paid_at = excluded.paid_at,
+        firebase_payment_key = excluded.firebase_payment_key,
+        updated_at = now()
+    `,
+    [ticketId, tx.amount, normalizePaymentMethod(tx.paymentMethod), referenceNumber, timestamp]
+  );
 };
 
 export const supabaseService = {
@@ -584,7 +789,31 @@ export const supabaseService = {
   },
 
   async listTransactions(limit = 250) {
-    return (await rowsFromTable<AnyRecord>("tickets", { order: { column: "created_at", ascending: false }, limit })).map(transactionFromTicket);
+    if (supabasePool) {
+      const rows = await queryRows<AnyRecord>(
+        `
+          select
+            t.*,
+            coalesce(p.amount, t.fare, 0) as official_amount,
+            coalesce(p.payment_method::text, t.payment_method::text, 'unknown') as official_payment_method,
+            coalesce(p.payment_status::text, t.payment_status::text, 'paid') as official_payment_status
+          from public.tickets t
+          left join public.payments p on p.ticket_id = t.id
+          where lower(coalesce(p.payment_status::text, t.payment_status::text, 'paid')) = 'paid'
+          order by coalesce(p.paid_at, t.created_at) desc
+          limit $1
+        `,
+        [Math.max(1, limit)]
+      );
+      return dedupeTicketRows(rows).map(transactionFromTicket);
+    }
+
+    const rows = await rowsFromTable<AnyRecord>("tickets", { order: { column: "created_at", ascending: false }, limit });
+    return dedupeTicketRows(rows.filter((row) => String(row.payment_status || "paid").toLowerCase() === "paid")).map(transactionFromTicket);
+  },
+
+  async listPayments() {
+    return officialPaymentRows();
   },
 
   async listExpenses() {
@@ -604,13 +833,16 @@ export const supabaseService = {
   },
 
   async getStructuredSummary() {
-    const [employees, buses, routes, expenses, notifications, criticalAlerts] = await Promise.all([
+    const [employees, buses, routes, expenses, notifications, criticalAlerts, trips, tickets, payments] = await Promise.all([
       this.listEmployees(),
       this.listBuses(),
       this.listRoutes(),
       this.listExpenses(),
       this.listNotifications(),
-      this.listCriticalAlerts()
+      this.listCriticalAlerts(),
+      rowsFromTable<AnyRecord>("trips"),
+      officialTicketRows(10000),
+      this.listPayments()
     ]);
 
     return {
@@ -619,22 +851,72 @@ export const supabaseService = {
       routes: routes.length,
       expenses: expenses.length,
       notifications: notifications.length,
-      criticalAlerts: criticalAlerts.length
+      criticalAlerts: criticalAlerts.length,
+      trips: trips.length,
+      tickets: tickets.length,
+      payments: payments.length
     };
   },
 
   async getAnalyticsSummary() {
-    const [tickets, expenses] = await Promise.all([this.listTransactions(1000), this.listExpenses()]);
-    const grossRevenue = tickets.reduce((sum, ticket) => sum + ticket.amount, 0);
+    const [transactions, expenses] = await Promise.all([this.listTransactions(10000), this.listExpenses()]);
+    const grossRevenue = transactions.reduce((sum, transaction) => sum + transaction.amount, 0);
     const expenseTotal = expenses.reduce((sum, expense) => sum + toNumber(expense.amount), 0);
 
     return {
       grossRevenue,
       expenseTotal,
       netProfit: grossRevenue - expenseTotal,
-      ticketCount: tickets.length,
-      passengerCount: tickets.reduce((sum, ticket) => sum + ticket.passengerCount, 0)
+      ticketCount: transactions.length,
+      passengerCount: transactions.reduce((sum, transaction) => sum + transaction.passengerCount, 0)
     };
+  },
+
+  async getOfficialDashboardStats(liveStats: Pick<DashboardStats, "activeBuses" | "emergencyCount" | "lastUpdated">): Promise<DashboardStats> {
+    const [transactions, expenses] = await Promise.all([this.listTransactions(10000), this.listExpenses()]);
+    const cashTotal = transactions
+      .filter((transaction) => String(transaction.paymentMethod || "").toLowerCase() === "cash")
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const gcashTotal = transactions
+      .filter((transaction) => String(transaction.paymentMethod || "").toLowerCase() === "gcash")
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const otherTotal = transactions
+      .filter((transaction) => !["cash", "gcash"].includes(String(transaction.paymentMethod || "").toLowerCase()))
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const totalExpenses = expenses.reduce((sum, expense) => sum + toNumber(expense.amount), 0);
+    const totalRevenue = cashTotal + gcashTotal + otherTotal;
+
+    return {
+      totalRevenue,
+      totalExpenses,
+      netProfit: totalRevenue - totalExpenses,
+      activeBuses: liveStats.activeBuses,
+      totalPassengers: transactions.reduce((sum, transaction) => sum + transaction.passengerCount, 0),
+      cashTotal,
+      gcashTotal,
+      totalTransactions: transactions.length,
+      emergencyCount: liveStats.emergencyCount,
+      lastUpdated: new Date().toISOString()
+    };
+  },
+
+  async getRouteRevenueReport() {
+    const rows = await this.listTransactions(10000);
+    const byRoute = new Map<string, RevenueReport>();
+
+    rows.forEach((row) => {
+      const report = {
+        route: row.route,
+        revenue: row.amount,
+        passengers: row.passengerCount
+      };
+      const current = byRoute.get(report.route) || { route: report.route, revenue: 0, passengers: 0 };
+      current.revenue += report.revenue;
+      current.passengers += report.passengers;
+      byRoute.set(report.route, current);
+    });
+
+    return [...byRoute.values()].sort((a, b) => b.revenue - a.revenue);
   },
 
   async syncRoute(route: RouteConfig) {
@@ -681,5 +963,58 @@ export const supabaseService = {
       error_message: errorMessage || null,
       synced_at: new Date().toISOString()
     });
+  },
+
+  async syncTransactions(transactions: TransactionLog[]) {
+    if (!supabasePool) {
+      return {
+        synced: false,
+        reason: "SUPABASE_DB_URL is required for Firebase transaction sync.",
+        trips: 0,
+        tickets: 0,
+        payments: 0
+      };
+    }
+
+    const tripSummaries = new Map<string, { passengerCount: number; timestamp: string }>();
+    transactions.forEach((tx) => {
+      const tripNo = safeKey(`${tx.deviceId || "device"}-${tx.tripId || "trip"}`) || `trip-${Date.now()}`;
+      const current = tripSummaries.get(tripNo) || { passengerCount: 0, timestamp: toIsoDate(tx.time) };
+      current.passengerCount += Math.max(1, toNumber(tx.passengerCount, 1));
+      const nextTime = toIsoDate(tx.time);
+      if (Date.parse(nextTime) < Date.parse(current.timestamp)) current.timestamp = nextTime;
+      tripSummaries.set(tripNo, current);
+    });
+
+    const tripIds = new Map<string, string | null>();
+    for (const [tripNo, summary] of tripSummaries) {
+      tripIds.set(tripNo, await upsertTrip(tripNo, summary.passengerCount, summary.timestamp));
+    }
+
+    let ticketCount = 0;
+    let paymentCount = 0;
+    for (const tx of transactions) {
+      const tripNo = safeKey(`${tx.deviceId || "device"}-${tx.tripId || "trip"}`) || `trip-${Date.now()}`;
+      const ticketNo = safeKey(tx.id) || `${tripNo}-${ticketCount + 1}`;
+      const timestamp = toIsoDate(tx.time);
+      const ticketId = await upsertTicket(tx, ticketNo, tripIds.get(tripNo) || null, timestamp);
+      await upsertPayment(tx, ticketId, ticketNo, timestamp);
+      ticketCount += 1;
+      paymentCount += 1;
+    }
+
+    await insertSyncLog({
+      source_path: "POS_Devices/*/Trips/*/Transactions",
+      target_table: "trips,tickets,payments",
+      sync_status: "success",
+      synced_at: new Date().toISOString()
+    });
+
+    return {
+      synced: true,
+      trips: tripIds.size,
+      tickets: ticketCount,
+      payments: paymentCount
+    };
   }
 };

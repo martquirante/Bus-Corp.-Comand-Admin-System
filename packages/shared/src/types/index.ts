@@ -282,6 +282,7 @@ export interface DashboardSummary {
     firebase: string;
     supabase: string;
     mode: string;
+    auth?: string;
   };
   structuredTotals?: {
     employees: number;
@@ -290,6 +291,36 @@ export interface DashboardSummary {
     expenses: number;
     notifications: number;
     criticalAlerts: number;
+    trips?: number;
+    tickets?: number;
+    payments?: number;
+  };
+  revenue?: {
+    gross: number;
+    expenses: number;
+    net: number;
+    source: "supabase.payments";
+  };
+  counts?: {
+    transactions: number;
+    payments: number;
+    trips: number;
+    passengers: number;
+    buses: number;
+    employees: number;
+  };
+  live?: {
+    activeBuses: number;
+    posDevices: number;
+    currentPax: number;
+    sosAlerts: number;
+    assistanceRequests: number;
+    source: "firebase.POS_Devices.LiveStatus";
+  };
+  status?: {
+    firebase: string;
+    supabase: string;
+    auth: string;
   };
   lastUpdated: string;
 }

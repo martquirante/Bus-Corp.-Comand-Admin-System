@@ -97,7 +97,7 @@ export function DashboardPage() {
             <StatCard
               label="Total Revenue"
               value={<AnimatedNumber value={dashboardStats.totalRevenue} formatter={formatPeso} />}
-              detail={`${formatPeso(dashboardStats.netProfit)} net after expenses`}
+              detail={`${formatPeso(dashboardStats.netProfit)} net after Supabase expenses`}
               tone="green"
               icon={Banknote}
             />
@@ -179,7 +179,7 @@ export function DashboardPage() {
       </section>
 
       <section className="dashboard-grid">
-        <ChartCard title="Revenue Trend" eyebrow={stats.source === "demo" ? "Demo preview" : "Firebase live"}>
+        <ChartCard title="Revenue Trend" eyebrow="Supabase SQL official records">
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={revenueRoutes.slice(0, 6)}>
               <defs>
@@ -199,7 +199,7 @@ export function DashboardPage() {
 
         <AlertPanel buses={buses} />
 
-        <ChartCard title="Payment Split" eyebrow="Cash and GCash">
+        <ChartCard title="Payment Split" eyebrow="Official Supabase payments">
           <div className="payment-legend">
             {paymentData.map((item) => (
               <span key={item.name}>

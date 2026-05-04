@@ -6,6 +6,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(5000),
   ADMIN_WEB_ORIGIN: z.string().default("http://localhost:3000"),
   SESSION_SECRET: z.string().default("local-development-session-secret"),
+  AUTH_MODE: z.enum(["dev", "production"]).default("dev"),
+  REQUIRE_FIREBASE_ID_TOKEN: z.coerce.boolean().default(false),
   FIREBASE_PROJECT_ID: z.string().default("santranspos"),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
@@ -23,6 +25,11 @@ const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
+
+export const authModeLabel = () =>
+  env.AUTH_MODE === "dev" || !env.REQUIRE_FIREBASE_ID_TOKEN ? "dev-bypass" : "protected";
+
+export const canBypassReadAuth = () => authModeLabel() === "dev-bypass";
 
 export const firebaseCredentialConfig = {
   projectId: env.FIREBASE_PROJECT_ID,

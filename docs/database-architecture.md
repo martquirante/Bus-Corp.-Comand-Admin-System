@@ -15,8 +15,13 @@ Live paths currently supported:
 - `Users`
 - `messages`
 - `AdminRoutes`
+- `AdminCriticalAlertState`
+- `AdminNotificationReads`
+- `AdminChatConversations`
 
 `AdminRoutes/{routeId}/waypoints` and `AdminRoutes/{routeId}/stops` are the source for actual mapped route lines when present.
+
+`POS_Devices.LiveStatus.totalCash` and `totalGcash` are treated as Live Session Revenue only. Official revenue comes from Supabase `payments`.
 
 ## Supabase PostgreSQL
 
@@ -29,6 +34,7 @@ Supabase is the SQL/structured database. The backend supports these tables:
 - `routes`
 - `route_stops`
 - `route_waypoints`
+- `trips`
 - `tickets`
 - `payments`
 - `expenses`
@@ -37,6 +43,12 @@ Supabase is the SQL/structured database. The backend supports these tables:
 - `conversations`
 - `chat_messages`
 - `firebase_sync_logs`
+
+Dashboard official totals are computed from Supabase:
+
+- `payments` for revenue and payment split
+- `tickets` for transaction count
+- `expenses` for net profit
 
 Do not use Firebase SQL Connect as the main SQL database anymore.
 

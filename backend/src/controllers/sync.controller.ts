@@ -16,5 +16,10 @@ export const syncController = {
   async syncFirebaseToSupabase(req: Request, res: Response) {
     const result = await sqlSyncService.syncFirebaseToSupabase(req.user?.email || "system");
     res.json(envelope(result, firebaseService.source()));
+  },
+
+  async syncTransactions(req: Request, res: Response) {
+    const result = await sqlSyncService.syncTransactionsToSupabase(req.user?.email || "system");
+    res.json(envelope(result, firebaseService.source()));
   }
 };

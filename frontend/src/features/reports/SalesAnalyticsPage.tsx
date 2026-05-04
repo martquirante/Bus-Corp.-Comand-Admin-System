@@ -148,7 +148,7 @@ export function SalesAnalyticsPage() {
   return (
     <AppShell title="Sales & Analytics" kicker="Fare revenue and route performance">
       <section className="stats-grid compact-grid">
-        <StatCard label="Gross Revenue" value={<AnimatedNumber value={dashboardStats?.totalRevenue || 0} formatter={formatPeso} />} detail="All live buses" tone="green" icon={Banknote} />
+        <StatCard label="Gross Revenue" value={<AnimatedNumber value={dashboardStats?.totalRevenue || 0} formatter={formatPeso} />} detail="Supabase payments" tone="green" icon={Banknote} />
         <StatCard label="Expenses" value={<AnimatedNumber value={dashboardStats?.totalExpenses || 0} formatter={formatPeso} />} detail="Fuel, repair, operation" tone="amber" icon={Coins} />
         <StatCard label="Net Profit" value={<AnimatedNumber value={dashboardStats?.netProfit || 0} formatter={formatPeso} />} detail="Revenue minus expenses" tone="blue" icon={TrendingUp} />
         <StatCard label="Tickets" value={<AnimatedNumber value={dashboardStats?.totalTransactions || 0} formatter={formatNumber} />} detail="Transaction log records" tone="violet" icon={Landmark} />
@@ -179,7 +179,7 @@ export function SalesAnalyticsPage() {
       </section>
 
       <section className="analytics-grid">
-        <ChartCard title="Top Route Revenue" eyebrow={report.source === "demo" ? "Demo preview" : "Firebase live"}>
+        <ChartCard title="Top Route Revenue" eyebrow="Supabase tickets">
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={revenueRows.slice(0, 8)}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />

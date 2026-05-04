@@ -13,11 +13,24 @@ The backend can read Supabase structured tables and can sync Firebase `AdminRout
 - `route_waypoints`
 - `firebase_sync_logs`
 
+It also syncs Firebase conductor app transactions from:
+
+```text
+POS_Devices/{deviceId}/Trips/{tripId}/Transactions/{transactionId}
+```
+
+into:
+
+- `trips`
+- `tickets`
+- `payments`
+
 Endpoints:
 
 - `GET /api/sync/status`
 - `POST /api/sync/firebase-to-supabase`
 - `POST /api/routes/:id/sync-to-supabase`
+- `POST /api/sync/transactions`
 
 If Supabase backend env values are missing, sync reports `not-configured` and the app continues using Firebase Realtime Database.
 
@@ -28,7 +41,8 @@ If Supabase backend env values are missing, sync reports `not-configured` and th
 
 ## Future Sync Targets
 
-- `POS_Devices` -> `pos_device_status`
+- `POS_Devices.LiveStatus` -> live UI only and later `pos_device_status`
+- `POS_Devices.Trips.Transactions` -> `trips`, `tickets`, `payments`
 - `AssistanceRequests` -> `critical_alerts` and `notifications`
 - `messages` -> `chat_messages` and `notifications`
 - `Expenses` -> `expenses`

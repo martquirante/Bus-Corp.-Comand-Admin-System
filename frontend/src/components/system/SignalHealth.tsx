@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RadioTower, RefreshCw, Server } from "lucide-react";
-import { api, apiBaseUrl } from "@/services/api";
+import { api, apiBaseUrl, getSessionToken } from "@/services/api";
 import { formatDateTime } from "@/utils/format";
 
 type SignalState = "checking" | "connected" | "demo" | "offline";
@@ -12,6 +12,7 @@ type HealthSnapshot = {
   firebase: "connected" | "rtdb-rest" | "not-configured";
   supabase: "connected" | "not-configured" | "error";
   supabaseMode: "service-role" | "postgres" | "not-configured";
+  auth: "dev-bypass" | "protected";
   uptime: number;
   generatedAt: string;
   source: "firebase" | "rtdb-rest" | "demo";
@@ -54,6 +55,7 @@ export function SignalHealth() {
         firebase: result.data.firebase,
         supabase: result.data.supabase,
         supabaseMode: result.data.supabaseMode,
+        auth: result.data.auth,
         uptime: result.data.uptime,
         generatedAt: result.generatedAt,
         source: result.source
@@ -91,6 +93,11 @@ export function SignalHealth() {
   };
 
   const syncToSql = async () => {
+    if (!getSessionToken()) {
+      setSyncMessage("Sync requires an admin login/session. Dev bypass is only for read-only dashboard data.");
+      return;
+    }
+
     setIsSyncing(true);
     setSyncMessage(null);
 
@@ -172,6 +179,10 @@ export function SignalHealth() {
             <div>
               <span>Uptime</span>
               <strong>{health ? formatUptime(health.uptime) : "n/a"}</strong>
+            </div>
+            <div>
+              <span>Auth</span>
+              <strong>{health?.auth === "dev-bypass" ? "Dev bypass" : "Protected"}</strong>
             </div>
             <div className="signal-wide">
               <span>Endpoint</span>

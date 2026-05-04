@@ -19,6 +19,20 @@ const toText = (value: unknown, fallback = "N/A") =>
 
 const isOnline = (lastUpdate: number) => Date.now() - lastUpdate < 300000;
 
+const isValidCoordinate = (lat: unknown, lng: unknown) => {
+  const parsedLat = Number(lat);
+  const parsedLng = Number(lng);
+  return (
+    Number.isFinite(parsedLat) &&
+    Number.isFinite(parsedLng) &&
+    parsedLat >= -90 &&
+    parsedLat <= 90 &&
+    parsedLng >= -180 &&
+    parsedLng <= 180 &&
+    !(parsedLat === 0 && parsedLng === 0)
+  );
+};
+
 const getRouteFromTrips = (bus: AnyRecord) => {
   const trips = Object.values(bus.Trips || {}) as AnyRecord[];
 
@@ -62,6 +76,13 @@ export const extractFleet = (root: AnyRecord): FleetBus[] => {
     const lastUpdate = toNumber(live.lastUpdate);
     const online = isOnline(lastUpdate);
     const busNumber = toText(live.busNumber, deviceId);
+    const hasValidGps = isValidCoordinate(live.lat, live.lng);
+    const statusText = String(live.status || live.currentLoop || live.action || "").toLowerCase();
+    const isSnapshotNode = deviceId.includes("_");
+    const snapshotIsActive =
+      hasValidGps && ["active", "moving", "running", "idle", "sos", "emergency"].some((word) => statusText.includes(word));
+    if (isSnapshotNode && !snapshotIsActive) return;
+
     const cash = toNumber(live.totalCash);
     const gcash = toNumber(live.totalGcash);
     const passengers =
@@ -77,8 +98,8 @@ export const extractFleet = (root: AnyRecord): FleetBus[] => {
       online,
       emergency: live.emergencyStatus === true,
       speed: toNumber(live.speed),
-      lat: Number.isFinite(Number(live.lat)) ? Number(live.lat) : null,
-      lng: Number.isFinite(Number(live.lng)) ? Number(live.lng) : null,
+      lat: hasValidGps ? Number(live.lat) : null,
+      lng: hasValidGps ? Number(live.lng) : null,
       cash,
       gcash,
       total: cash + gcash,

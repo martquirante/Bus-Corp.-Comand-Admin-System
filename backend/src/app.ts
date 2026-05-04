@@ -41,6 +41,15 @@ app.use(express.json({ limit: "1mb" }));
 app.use(requestLogger);
 app.use(apiRateLimit);
 
+app.get("/", (_req, res) => {
+  res.json({
+    status: "ok",
+    service: "pos-bus-admin-api",
+    message: "Use /api/health for backend health checks.",
+    health: "/api/health"
+  });
+});
+
 app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);

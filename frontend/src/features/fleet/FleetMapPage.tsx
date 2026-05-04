@@ -65,7 +65,7 @@ export function FleetMapPage() {
             { header: "Driver", cell: (row) => row.driver },
             { header: "Route", cell: (row) => row.route },
             { header: "Speed", cell: (row) => `${row.speed} km/h` },
-            { header: "Sales", cell: (row) => formatPeso(row.total) },
+            { header: "Live Session Revenue", cell: (row) => formatPeso(row.total) },
             { header: "Signal", cell: (row) => relativeMinutes(row.lastUpdate) },
             { header: "Status", cell: (row) => <span className={`status-pill status-${row.status}`}>{row.status}</span> }
           ]}

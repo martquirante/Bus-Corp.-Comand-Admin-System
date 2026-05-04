@@ -209,7 +209,9 @@ const mergeProductionRoutes = (adminRoutes: RouteConfig[], supabaseRoutes: Route
     });
   });
 
-  return sortProductionRoutes([...byId.values()]);
+  return sortProductionRoutes(
+    [...byId.values()].filter((route) => (route.status || "active") === "active" && (route as RawRoute).visible !== false)
+  );
 };
 
 const routePayload = (

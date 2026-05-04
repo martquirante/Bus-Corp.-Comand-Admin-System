@@ -1,9 +1,12 @@
-import { buildRevenueReport } from "./dataTransform.service.js";
-import { firebaseService } from "./firebase.service.js";
+import { supabaseService } from "./supabase.service.js";
 
 export const reportService = {
   async getRevenueReport() {
-    const root = await firebaseService.getRootData();
-    return buildRevenueReport(root);
+    try {
+      return await supabaseService.getRouteRevenueReport();
+    } catch (error) {
+      console.warn("[reports] Supabase revenue report unavailable.", error);
+      return [];
+    }
   }
 };

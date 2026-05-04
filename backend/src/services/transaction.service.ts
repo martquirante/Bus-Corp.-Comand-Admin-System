@@ -15,15 +15,21 @@ const includes = (value: string, needle?: string) =>
 
 export const transactionService = {
   async getTransactions(filters: TransactionFilters): Promise<TransactionLog[]> {
-    const root = await firebaseService.getRootData();
-    let sqlTransactions: TransactionLog[] = [];
     try {
-      sqlTransactions = await supabaseService.listTransactions(filters.limit);
+      const sqlTransactions = await supabaseService.listTransactions(filters.limit);
+      if (sqlTransactions.length) {
+        return sqlTransactions
+          .filter((tx) => includes(tx.busNumber, filters.bus))
+          .filter((tx) => includes(tx.passengerType, filters.type))
+          .filter((tx) => includes(tx.route, filters.route))
+          .slice(0, filters.limit);
+      }
     } catch (error) {
       console.warn("[transactions] Supabase read skipped.", error);
     }
 
-    return [...sqlTransactions, ...extractTransactions(root)]
+    const root = await firebaseService.getRootData();
+    return extractTransactions(root)
       .filter((tx) => includes(tx.busNumber, filters.bus))
       .filter((tx) => includes(tx.passengerType, filters.type))
       .filter((tx) => includes(tx.route, filters.route))
