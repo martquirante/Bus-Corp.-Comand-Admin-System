@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouteConfig } from "@pos-bus/shared";
 import {
   Eye,
@@ -22,30 +22,58 @@ import { RoutePreviewMap } from "@/components/map/RoutePreviewMap";
 import { formatNumber } from "@/utils/format";
 import {
   ROUTE_GOOGLE_MAP_REFS,
-  filterFareStopsBySelectedLine,
+  filterFareStopsBySelectedLineAndDirection,
   getFareStopLineId,
+  getGoogleMapReferenceForLine,
   getPrimaryRouteForLine,
   getRouteDisplayName,
+  getRouteLineLabel,
   getRouteStopsLabel,
   groupMainRouteLines,
   normalizeRouteLabel
 } from "@/utils/routeLines";
+import {
+  REFERENCE_GOOGLE_MAP_LINKS,
+  getReferenceRoutePoints
+} from "@/utils/referenceRouteWaypoints";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+type MainRouteLineId = "fvr-pitx" | "fvr-stcruz";
 
-const formatDuration = (minutesStr: string | number) => {
-  const mins = Number(minutesStr);
-  if (!mins || isNaN(mins)) return "";
+type RouteExtraFields = RouteConfig & {
+  lineId?: string;
+  routeGroup?: string;
+  googleMapReferenceUrl?: string;
+  source?: "legacy" | "admin" | "default" | "supabase" | string;
+  legacyKey?: string;
+  legacyPath?: string;
+};
+
+type RoutePayload = Partial<RouteConfig> &
+  Record<string, unknown> & {
+    lineId?: string;
+    routeGroup?: string;
+    googleMapReferenceUrl?: string;
+  };
+
+const asRouteExtra = (route?: RouteConfig | null): RouteExtraFields | null =>
+  route ? (route as RouteExtraFields) : null;
+
+const formatDuration = (minutesValue?: string | number | null) => {
+  const mins = Math.round(Number(minutesValue) || 0);
+
+  if (!mins) return "";
   if (mins < 60) return `${mins} min`;
+
   const hrs = Math.floor(mins / 60);
   const rem = mins % 60;
+
   if (rem === 0) return `${hrs} hr`;
   return `${hrs} hr ${rem} min`;
 };
 
 const formatWholePeso = (value?: number | string | null) => {
   const num = Number(value);
-  if (isNaN(num)) return "Not set";
+  if (!Number.isFinite(num)) return "Not set";
   return `₱${Math.round(num)}`;
 };
 
@@ -56,19 +84,73 @@ const emptyForm = {
   distanceKm: "",
   estimatedDurationMinutes: "",
   baseFare: "",
-  status: "active",
   mapReferenceUrl: ""
 };
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+const toWholePesoValue = (value: string | number | null | undefined) =>
+  Math.round(Number(value) || 0);
+
+const getRouteSeed = (
+  selectedLineId: MainRouteLineId,
+  direction: RouteConfig["direction"]
+) => {
+  if (selectedLineId === "fvr-pitx") {
+    return direction === "forward"
+      ? {
+          id: "fvr-to-pitx-via-gma",
+          routeName: "FVR to PITX via GMA",
+          origin: "FVR",
+          destination: "PITX",
+          reverseRouteId: "pitx-to-fvr-via-gma",
+          price: 170,
+          lineId: "fvr-pitx",
+          routeGroup: "FVR_PITX",
+          mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-pitx"]
+        }
+      : {
+          id: "pitx-to-fvr-via-gma",
+          routeName: "PITX to FVR via GMA",
+          origin: "PITX",
+          destination: "FVR",
+          reverseRouteId: "fvr-to-pitx-via-gma",
+          price: 170,
+          lineId: "fvr-pitx",
+          routeGroup: "FVR_PITX",
+          mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-pitx"]
+        };
+  }
+
+  return direction === "forward"
+    ? {
+        id: "fvr-to-st-cruz",
+        routeName: "FVR to ST. CRUZ",
+        origin: "FVR",
+        destination: "ST. CRUZ",
+        reverseRouteId: "st-cruz-to-fvr",
+        price: 100,
+        lineId: "fvr-stcruz",
+        routeGroup: "FVR_ST_CRUZ",
+        mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-stcruz"]
+      }
+    : {
+        id: "st-cruz-to-fvr",
+        routeName: "ST. CRUZ to FVR",
+        origin: "ST. CRUZ",
+        destination: "FVR",
+        reverseRouteId: "fvr-to-st-cruz",
+        price: 100,
+        lineId: "fvr-stcruz",
+        routeGroup: "FVR_ST_CRUZ",
+        mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-stcruz"]
+      };
+};
 
 export function RouteConfigPage() {
   const [direction, setDirection] = useState<RouteConfig["direction"]>("forward");
   const [editing, setEditing] = useState<RouteConfig | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [selectedLineId, setSelectedLineId] = useState<"fvr-pitx" | "fvr-stcruz">("fvr-pitx");
+  const [selectedLineId, setSelectedLineId] = useState<MainRouteLineId>("fvr-pitx");
   const [showHiddenRoutes, setShowHiddenRoutes] = useState(false);
-  // Editor is HIDDEN by default – only opens on "Edit fare stop" / "Add fare stop"
   const [showEditor, setShowEditor] = useState(false);
   const [showAllRoutesOnMap, setShowAllRoutesOnMap] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -77,10 +159,11 @@ export function RouteConfigPage() {
   const [routeMetrics, setRouteMetrics] = useState<
     Record<string, { distanceKm?: number; estimatedDurationMinutes?: number }>
   >({});
-
-  // ─── Delete confirmation state ─────────────────────────────────────────────
   const [deleteConfirmRow, setDeleteConfirmRow] = useState<RouteConfig | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isApplyingReference, setIsApplyingReference] = useState(false);
+
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   const loadRoutes = useCallback(() => api.routes(), []);
   const loadLegacyForward = useCallback(() => api.getLegacyRoutesForward(), []);
@@ -96,66 +179,142 @@ export function RouteConfigPage() {
   const hiddenLine = routeLines.find((line) => line.id === "hidden");
 
   const selectedLine =
-    visibleLines.find((line) => line.id === selectedLineId) || visibleLines[0];
+    visibleLines.find((line) => line.id === selectedLineId) || visibleLines[0] || null;
+
   const selectedRoute = getPrimaryRouteForLine(selectedLine, direction);
+  const selectedRouteSeed = getRouteSeed(selectedLineId, direction);
+  const selectedRouteExtra = asRouteExtra(selectedRoute);
+  const editingExtra = asRouteExtra(editing);
 
   const allLegacy = useMemo(
     () => [...(legacyForward.data || []), ...(legacyReverse.data || [])],
     [legacyForward.data, legacyReverse.data]
   );
 
-  // Fare Stop Matrix – filtered by selected LINE then by DIRECTION (separate tabs)
   const visibleFareMatrixRows = useMemo(
-    () =>
-      filterFareStopsBySelectedLine(allLegacy, selectedLineId).filter(
-        (row) => row.direction === direction
-      ),
+    () => filterFareStopsBySelectedLineAndDirection(allLegacy, selectedLineId, direction),
     [allLegacy, selectedLineId, direction]
   );
-
-  // Sync computed metrics into form (read-only distance/duration)
-  useEffect(() => {
-    if (!selectedRoute) return;
-    const metrics = routeMetrics[selectedRoute.id];
-    if (!metrics) return;
-    setForm((current) => ({
-      ...current,
-      distanceKm:
-        current.distanceKm || (metrics.distanceKm ? String(metrics.distanceKm) : ""),
-      estimatedDurationMinutes:
-        current.estimatedDurationMinutes ||
-        (metrics.estimatedDurationMinutes
-          ? String(metrics.estimatedDurationMinutes)
-          : "")
-    }));
-  }, [selectedRoute?.id, routeMetrics]);
 
   const mapRoutes = useMemo(
     () => (showAllRoutesOnMap ? rows : selectedRoute ? [selectedRoute] : []),
     [showAllRoutesOnMap, rows, selectedRoute]
   );
 
-  // ─── Route line selection ─────────────────────────────────────────────────
-  // Does NOT open the editor – selecting a route line only updates the map/matrix.
-  const selectRouteLine = (lineId: "fvr-pitx" | "fvr-stcruz") => {
+  const activeReferenceUrl =
+    selectedRouteExtra?.googleMapReferenceUrl ||
+    selectedRoute?.mapReferenceUrl ||
+    getGoogleMapReferenceForLine(selectedLineId) ||
+    ROUTE_GOOGLE_MAP_REFS[selectedLineId] ||
+    REFERENCE_GOOGLE_MAP_LINKS[selectedLineId] ||
+    "";
+
+  useEffect(() => {
+    if (!selectedRoute) return;
+
+    const metrics = routeMetrics[selectedRoute.id];
+    if (!metrics) return;
+
+    setForm((current) => {
+      const nextDistance = metrics.distanceKm ? String(metrics.distanceKm) : current.distanceKm;
+      const nextDuration = metrics.estimatedDurationMinutes
+        ? String(metrics.estimatedDurationMinutes)
+        : current.estimatedDurationMinutes;
+
+      if (
+        current.distanceKm === nextDistance &&
+        current.estimatedDurationMinutes === nextDuration
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        distanceKm: nextDistance,
+        estimatedDurationMinutes: nextDuration
+      };
+    });
+  }, [selectedRoute?.id, routeMetrics]);
+
+  useEffect(() => {
+    if (selectedRoute && selectedRouteId !== selectedRoute.id) {
+      setSelectedRouteId(selectedRoute.id);
+    }
+
+    if (!selectedRoute && selectedRouteId) {
+      setSelectedRouteId(null);
+    }
+  }, [selectedRoute?.id, selectedRouteId]);
+
+  useEffect(() => {
+    if (!showEditor) return;
+
+    window.setTimeout(() => {
+      editorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }, 80);
+  }, [showEditor, editing?.id]);
+
+  const handleRouteMetrics = useCallback(
+    (
+      routeId: string,
+      metrics: { distanceKm?: number; estimatedDurationMinutes?: number }
+    ) => {
+      setRouteMetrics((current) => {
+        const previous = current[routeId] || {};
+
+        const nextDistance = metrics.distanceKm ?? previous.distanceKm;
+        const nextDuration =
+          metrics.estimatedDurationMinutes ?? previous.estimatedDurationMinutes;
+
+        if (
+          previous.distanceKm === nextDistance &&
+          previous.estimatedDurationMinutes === nextDuration
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [routeId]: {
+            distanceKm: nextDistance,
+            estimatedDurationMinutes: nextDuration
+          }
+        };
+      });
+    },
+    []
+  );
+
+  const refreshAllRoutes = async () => {
+    await routes.refresh();
+    await legacyForward.refresh();
+    await legacyReverse.refresh();
+  };
+
+  const selectRouteLine = (lineId: MainRouteLineId) => {
     setSelectedLineId(lineId);
     setShowEditor(false);
     setEditing(null);
+    setForm(emptyForm);
     setMessage(null);
     setDeleteConfirmRow(null);
+
     const line = routeLines.find((item) => item.id === lineId);
     const route = line ? getPrimaryRouteForLine(line, direction) : null;
-    if (route) setSelectedRouteId(route.id);
+
+    setSelectedRouteId(route?.id || null);
   };
 
-  // ─── Direction tab switching ──────────────────────────────────────────────
-  // Does NOT open the editor – just swaps direction view.
   const switchDirection = (dir: RouteConfig["direction"]) => {
     setDirection(dir);
     setDeleteConfirmRow(null);
+
     const route = getPrimaryRouteForLine(selectedLine, dir);
-    if (route) setSelectedRouteId(route.id);
-    // Close editor when switching direction to avoid stale edit state
+    setSelectedRouteId(route?.id || null);
+
     if (showEditor) {
       setShowEditor(false);
       setEditing(null);
@@ -164,8 +323,52 @@ export function RouteConfigPage() {
     }
   };
 
-  // ─── Fill form and OPEN editor (Edit buttons only) ───────────────────────
-  const fillFormFromRoute = (route: RouteConfig) => {
+  const openEditorForFareStop = (route: RouteConfig) => {
+    const routeExtra = asRouteExtra(route);
+    const detectedLineId = getFareStopLineId(route);
+    const nextLineId: MainRouteLineId =
+      detectedLineId === "fvr-pitx" || detectedLineId === "fvr-stcruz"
+        ? detectedLineId
+        : selectedLineId;
+
+    const routeRef =
+      routeExtra?.googleMapReferenceUrl ||
+      route.mapReferenceUrl ||
+      getGoogleMapReferenceForLine(nextLineId) ||
+      REFERENCE_GOOGLE_MAP_LINKS[nextLineId];
+
+    setSelectedLineId(nextLineId);
+    setEditing(route);
+    setSelectedRouteId(selectedRoute?.id || null);
+    setDirection(route.direction);
+    setShowEditor(true);
+    setMessage(null);
+    setDeleteConfirmRow(null);
+
+    setForm({
+      origin: normalizeRouteLabel(route.origin),
+      destination: normalizeRouteLabel(route.destination),
+      price: String(toWholePesoValue(route.price)),
+      distanceKm:
+        route.distanceKm || route.distance ? String(route.distanceKm || route.distance) : "",
+      estimatedDurationMinutes: route.estimatedDurationMinutes
+        ? String(route.estimatedDurationMinutes)
+        : "",
+      baseFare: route.baseFare
+        ? String(toWholePesoValue(route.baseFare))
+        : String(toWholePesoValue(route.price)),
+      mapReferenceUrl: routeRef || ""
+    });
+  };
+
+  const openEditorForAdminRoute = (route: RouteConfig) => {
+    const routeExtra = asRouteExtra(route);
+    const routeRef =
+      routeExtra?.googleMapReferenceUrl ||
+      route.mapReferenceUrl ||
+      getGoogleMapReferenceForLine(selectedLineId) ||
+      REFERENCE_GOOGLE_MAP_LINKS[selectedLineId];
+
     setEditing(route);
     setSelectedRouteId(route.id);
     setDirection(route.direction);
@@ -173,40 +376,43 @@ export function RouteConfigPage() {
     setMessage(null);
     setDeleteConfirmRow(null);
 
-    if (route.source === "legacy") {
-      const detectedLineId = getFareStopLineId(route);
-      if (detectedLineId === "fvr-pitx" || detectedLineId === "fvr-stcruz") {
-        setSelectedLineId(detectedLineId);
-      }
-    }
-
-    // Use route's mapReferenceUrl; fall back to the canonical ref for the line
-    const lineRef = ROUTE_GOOGLE_MAP_REFS[selectedLineId];
     setForm({
       origin: normalizeRouteLabel(route.origin),
       destination: normalizeRouteLabel(route.destination),
-      price: String(route.price || ""),
+      price: String(toWholePesoValue(route.price)),
       distanceKm:
         route.distanceKm || route.distance ? String(route.distanceKm || route.distance) : "",
       estimatedDurationMinutes: route.estimatedDurationMinutes
         ? String(route.estimatedDurationMinutes)
         : "",
-      baseFare: route.baseFare ? String(route.baseFare) : String(route.price || ""),
-      status: route.status || "active",
-      mapReferenceUrl: route.mapReferenceUrl || lineRef || ""
+      baseFare: route.baseFare
+        ? String(toWholePesoValue(route.baseFare))
+        : String(toWholePesoValue(route.price)),
+      mapReferenceUrl: routeRef || ""
     });
   };
 
-  // ─── Open editor in CREATE mode (Add fare stop) ───────────────────────────
   const openCreateFareStop = () => {
     setEditing(null);
-    setSelectedRouteId(null);
+    setSelectedRouteId(selectedRoute?.id || null);
     setShowEditor(true);
-    setMessage(null);
+    setMessageIsError(false);
+    setMessage(
+      `Adding a new ${direction} fare stop for ${getRouteLineLabel(selectedLineId)}. Fill in the drop-off and fare, then save.`
+    );
     setDeleteConfirmRow(null);
-    // Pre-fill the canonical Google Maps reference for the active line
-    const lineRef = ROUTE_GOOGLE_MAP_REFS[selectedLineId] || "";
-    setForm({ ...emptyForm, mapReferenceUrl: lineRef });
+
+    setForm({
+      ...emptyForm,
+      origin:
+        direction === "forward"
+          ? "FVR"
+          : selectedLineId === "fvr-pitx"
+            ? "PITX"
+            : "ST. CRUZ",
+      destination: direction === "forward" ? "" : "FVR",
+      mapReferenceUrl: activeReferenceUrl
+    });
   };
 
   const closeEditor = () => {
@@ -216,7 +422,6 @@ export function RouteConfigPage() {
     setMessage(null);
   };
 
-  // ─── Delete fare stop ─────────────────────────────────────────────────────
   const requestDeleteFareStop = (row: RouteConfig) => {
     setDeleteConfirmRow(row);
     setMessage(null);
@@ -225,16 +430,19 @@ export function RouteConfigPage() {
   const cancelDelete = () => setDeleteConfirmRow(null);
 
   const confirmDeleteFareStop = async () => {
-    if (!deleteConfirmRow || !deleteConfirmRow.legacyKey) return;
+    const rowExtra = asRouteExtra(deleteConfirmRow);
+    if (!deleteConfirmRow || !rowExtra?.legacyKey) return;
+
     setIsDeleting(true);
     setMessage(null);
+
     try {
-      await api.deleteLegacyRoute(deleteConfirmRow.direction, deleteConfirmRow.legacyKey);
+      await api.deleteLegacyRoute(deleteConfirmRow.direction, rowExtra.legacyKey);
+
       setDeleteConfirmRow(null);
       setMessageIsError(false);
       setMessage("Fare stop deleted. Conductors will no longer see this destination.");
-      await legacyForward.refresh();
-      await legacyReverse.refresh();
+      await refreshAllRoutes();
     } catch {
       setMessageIsError(true);
       setMessage("Could not delete fare stop. Please try again.");
@@ -244,81 +452,78 @@ export function RouteConfigPage() {
     }
   };
 
-  // ─── Save fare stop (create or update) ───────────────────────────────────
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setMessage(null);
     setMessageIsError(false);
 
-    const routePayload = {
+    const payload: RoutePayload = {
       direction,
+      lineId: selectedLineId,
+      routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ",
       routeName:
-        editing?.source === "legacy"
-          ? editing.routeName
-          : editing?.routeName ||
-            selectedLine?.label ||
-            `${form.origin} to ${form.destination}`,
+        editingExtra?.source === "admin"
+          ? editing?.routeName || selectedLine?.label || `${form.origin} to ${form.destination}`
+          : `${form.origin} to ${form.destination}`,
       origin: normalizeRouteLabel(form.origin),
       destination: normalizeRouteLabel(form.destination),
-      price: Math.round(Number(form.price) || 0),
+      price: toWholePesoValue(form.price),
+      baseFare: toWholePesoValue(form.baseFare || form.price),
       distanceKm: form.distanceKm ? Number(form.distanceKm) : undefined,
+      distance: form.distanceKm ? Number(form.distanceKm) : undefined,
       estimatedDurationMinutes: form.estimatedDurationMinutes
         ? Number(form.estimatedDurationMinutes)
         : undefined,
-      baseFare: Math.round(Number(form.baseFare || form.price) || 0),
       isViceVersa: true,
-      mapReferenceUrl: form.mapReferenceUrl || ROUTE_GOOGLE_MAP_REFS[selectedLineId] || "",
-      lineId: selectedLineId
+      mapReferenceUrl: form.mapReferenceUrl || activeReferenceUrl,
+      googleMapReferenceUrl: form.mapReferenceUrl || activeReferenceUrl,
+      status: editing?.status || "active"
     };
 
     try {
-      if (editing?.source === "legacy" && editing.legacyKey) {
-        // Edit existing fare stop row in Routes_Forward / Routes_Reverse
-        await api.updateLegacyRoute(editing.direction, editing.legacyKey, routePayload);
+      if (editingExtra?.source === "legacy" && editingExtra.legacyKey && editing) {
+        await api.updateLegacyRoute(editing.direction, editingExtra.legacyKey, payload);
         setMessage("Fare stop updated. Conductors will see the updated fare matrix.");
-      } else if (editing) {
-        // Edit AdminRoutes entry
-        await api.updateRoute(editing.id, routePayload);
+      } else if (editingExtra?.source === "admin" && editing) {
+        await api.updateRoute(editing.id, payload);
         setMessage("Route line updated. The live map will use the latest route data.");
       } else {
-        // NEW fare stop – push to the correct legacy collection
-        await api.createLegacyRoute(direction, routePayload);
+        await api.createLegacyRoute(direction, payload);
         setMessage("New fare stop saved. Conductors can now select this destination.");
       }
 
       closeEditor();
-      await routes.refresh();
-      await legacyForward.refresh();
-      await legacyReverse.refresh();
+      await refreshAllRoutes();
     } catch {
       setMessageIsError(true);
       setMessage("Something went wrong while saving. Please review the form and try again.");
     }
   };
 
-  // ─── Status toggle (AdminRoutes) ──────────────────────────────────────────
   const setStatus = async (route: RouteConfig, status: RouteConfig["status"]) => {
     if (!status) return;
+
     setMessage(null);
+
     try {
       await api.updateRouteStatus(route.id, status);
       await routes.refresh();
+
       setMessageIsError(false);
-      setMessage(
-        status === "active" ? "Route is now visible." : "Route moved to hidden routes."
-      );
+      setMessage(status === "active" ? "Route is now visible." : "Route moved to hidden routes.");
     } catch {
       setMessageIsError(true);
       setMessage("We could not update the route status. Please try again.");
     }
   };
 
-  // ─── Sync to Supabase ─────────────────────────────────────────────────────
   const syncRoute = async (route: RouteConfig) => {
     setMessage(null);
+
     try {
       await api.syncRouteToSupabase(route.id);
       await routes.refresh();
+
       setMessageIsError(false);
       setMessage("Route synced successfully.");
     } catch {
@@ -327,18 +532,100 @@ export function RouteConfigPage() {
     }
   };
 
-  // ─── Map highlight ────────────────────────────────────────────────────────
+  const ensureSelectedMainRoute = async () => {
+    if (selectedRoute) return selectedRoute;
+
+    const routeSeed = getRouteSeed(selectedLineId, direction);
+    const created = await api.createRoute({
+      routeName: routeSeed.routeName,
+      origin: routeSeed.origin,
+      destination: routeSeed.destination,
+      direction,
+      lineId: routeSeed.lineId,
+      routeGroup: routeSeed.routeGroup,
+      price: routeSeed.price,
+      baseFare: routeSeed.price,
+      isViceVersa: true,
+      reverseRouteId: routeSeed.reverseRouteId,
+      status: "active",
+      mapReferenceUrl: routeSeed.mapReferenceUrl,
+      googleMapReferenceUrl: routeSeed.mapReferenceUrl,
+      stops: [],
+      waypoints: []
+    } as Omit<RouteConfig, "id"> & Record<string, unknown>);
+
+    return created.data;
+  };
+
+  const applyReferenceRoutePath = async () => {
+    const referencePoints = getReferenceRoutePoints(selectedLineId, direction);
+
+    if (!referencePoints.length) {
+      setMessageIsError(true);
+      setMessage("No reference route path is available for this selected line yet.");
+      return;
+    }
+
+    const googleReferenceUrl =
+      REFERENCE_GOOGLE_MAP_LINKS[selectedLineId] || activeReferenceUrl;
+
+    setIsApplyingReference(true);
+    setMessageIsError(false);
+    setMessage("Applying reference route path. Please wait...");
+
+    try {
+      const routeForPath = await ensureSelectedMainRoute();
+
+      const waypoints = referencePoints.map((point, index) => ({
+        id: `ref-${selectedLineId}-${direction}-${index + 1}`,
+        name: point.name,
+        lat: point.lat,
+        lng: point.lng,
+        sequence: index + 1,
+        type:
+          index === 0
+            ? ("origin" as const)
+            : index === referencePoints.length - 1
+              ? ("destination" as const)
+              : ("waypoint" as const),
+        lineId: selectedLineId,
+        direction,
+        origin: index === 0 ? routeForPath.origin : undefined,
+        destination:
+          index === referencePoints.length - 1 ? routeForPath.destination : undefined
+      }));
+
+      await api.updateRoutePath(routeForPath.id, {
+        waypoints,
+        mapReferenceUrl: googleReferenceUrl,
+        googleMapReferenceUrl: googleReferenceUrl,
+        routeGeometrySource: "manual"
+      });
+
+      setShowAllRoutesOnMap(false);
+      setSelectedRouteId(routeForPath.id);
+      setMessageIsError(false);
+      setMessage(
+        "Reference route path applied. You can still use Manual edit route to fine-tune the line, then Save route path."
+      );
+
+      await routes.refresh();
+    } catch {
+      setMessageIsError(true);
+      setMessage("Could not apply the reference route path. Please try again.");
+    } finally {
+      setIsApplyingReference(false);
+    }
+  };
+
   const highlightRouteId =
-    editing?.source === "legacy"
+    editingExtra?.source === "legacy"
       ? selectedRoute?.id
       : selectedRouteId || selectedRoute?.id;
 
-  // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <AppShell title="Route Config" kicker="Main line planner and fare route editor">
-
-      {/* ── Global message banner ── */}
-      {message && (
+    <AppShell title="Route Config" kicker="Main line planner and conductor fare matrix">
+      {message ? (
         <div
           className="friendly-message"
           style={{
@@ -350,21 +637,25 @@ export function RouteConfigPage() {
         >
           {message}
         </div>
-      )}
+      ) : null}
 
-      {/* ═══════════════════════════════════════════════════════════
-          TOP SECTION: Map + Route Panel (always visible)
-      ═══════════════════════════════════════════════════════════ */}
       <section className="legacy-route-config-layout">
-
-        {/* ── Map workbench ── */}
         <div className="command-card route-map-workbench">
           <div className="section-heading compact">
             <div>
               <span>Route mapper</span>
-              <h2>Main road-aligned route preview</h2>
+              <h2>Main saved route preview</h2>
             </div>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "8px",
+                alignItems: "center",
+                flexWrap: "wrap",
+                justifyContent: "flex-end"
+              }}
+            >
               <div className="segmented-control compact-tabs" style={{ margin: 0 }}>
                 <button
                   type="button"
@@ -374,6 +665,7 @@ export function RouteConfigPage() {
                 >
                   Selected route
                 </button>
+
                 <button
                   type="button"
                   className={showAllRoutesOnMap ? "active" : ""}
@@ -383,64 +675,101 @@ export function RouteConfigPage() {
                   All saved routes
                 </button>
               </div>
+
+              <button
+                type="button"
+                className="soft-button"
+                onClick={applyReferenceRoutePath}
+                disabled={isApplyingReference}
+                title="Apply curated waypoints based on the Google Maps reference link"
+                style={{
+                  padding: "6px 10px",
+                  fontSize: "12px",
+                  opacity: isApplyingReference ? 0.65 : 1
+                }}
+              >
+                <MapPinned size={14} />
+                {isApplyingReference ? "Applying..." : "Use reference route path"}
+              </button>
+
               <MapPinned size={22} />
             </div>
           </div>
 
-          <RoutePreviewMap
-            routes={mapRoutes}
-            selectedRouteId={highlightRouteId}
-            onRouteMetrics={(routeId, metrics) =>
-              setRouteMetrics((current) => ({
-                ...current,
-                [routeId]: { ...current[routeId], ...metrics }
-              }))
-            }
-            onSaveWaypoints={async (
-              routeId,
-              points,
-              distanceKm,
-              estimatedDurationMinutes
-            ) => {
-              const waypoints = points.map((p, i) => ({
-                id: `wp-${Date.now()}-${i}`,
-                lat: p[0],
-                lng: p[1],
-                sequence: i,
-                type:
-                  i === 0
-                    ? ("origin" as const)
-                    : i === points.length - 1
-                    ? ("destination" as const)
-                    : ("waypoint" as const)
-              }));
-              const lineRef = ROUTE_GOOGLE_MAP_REFS[selectedLineId];
-              try {
-                // Use explicit "path" endpoint so only path fields are updated
-                await api.updateRoutePath(routeId, {
-                  waypoints,
-                  distanceKm,
-                  ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
-                  ...(lineRef ? { googleMapReferenceUrl: lineRef } : {})
-                });
-                setMessageIsError(false);
-                setMessage("Route path saved to Firebase AdminRoutes. Live Fleet Map will use this path.");
-                await routes.refresh();
-              } catch {
-                setMessageIsError(true);
-                setMessage("Failed to save route path. Your saved route was not changed.");
-              }
-            }}
-          />
+          {selectedRoute ? (
+            <RoutePreviewMap
+              routes={mapRoutes}
+              selectedRouteId={highlightRouteId}
+              onRouteMetrics={handleRouteMetrics}
+              onSaveWaypoints={async (
+                routeId,
+                points,
+                distanceKm,
+                estimatedDurationMinutes
+              ) => {
+                const waypoints = points.map((point, index) => ({
+                  id: `wp-${Date.now()}-${index}`,
+                  lat: point[0],
+                  lng: point[1],
+                  sequence: index + 1,
+                  type:
+                    index === 0
+                      ? ("origin" as const)
+                      : index === points.length - 1
+                        ? ("destination" as const)
+                        : ("waypoint" as const),
+                  lineId: selectedLineId,
+                  direction
+                }));
 
-          {/* Route line tabs (selector cards) */}
+                try {
+                  await api.updateRoutePath(routeId, {
+                    waypoints,
+                    distanceKm,
+                    ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
+                    mapReferenceUrl: activeReferenceUrl,
+                    googleMapReferenceUrl: activeReferenceUrl,
+                    routeGeometrySource: "manual"
+                  });
+
+                  setMessageIsError(false);
+                  setMessage("Route path saved to Firebase AdminRoutes. Live Fleet Map will use this path.");
+                  await routes.refresh();
+                } catch {
+                  setMessageIsError(true);
+                  setMessage("Failed to save route path. Your saved route was not changed.");
+                }
+              }}
+            />
+          ) : (
+            <div className="friendly-message" style={{ minHeight: 260, display: "grid", placeItems: "center" }}>
+              <div style={{ textAlign: "center" }}>
+                <strong>
+                  No {direction} main route exists yet for {getRouteLineLabel(selectedLineId)}.
+                </strong>
+                <p style={{ margin: "8px 0 14px", color: "var(--muted)" }}>
+                  Click Use reference route path to create this direction and save its route line.
+                </p>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={applyReferenceRoutePath}
+                  disabled={isApplyingReference}
+                >
+                  <MapPinned size={16} />
+                  {isApplyingReference ? "Applying..." : "Create from reference path"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="route-line-tabs">
             {visibleLines.map((line) => (
               <button
                 key={line.id}
                 type="button"
                 className={line.id === selectedLineId ? "active" : ""}
-                onClick={() => selectRouteLine(line.id as "fvr-pitx" | "fvr-stcruz")}
+                onClick={() => selectRouteLine(line.id as MainRouteLineId)}
               >
                 <strong>{line.label}</strong>
                 <span>{line.description}</span>
@@ -449,7 +778,6 @@ export function RouteConfigPage() {
           </div>
         </div>
 
-        {/* ── Active route panel (right sidebar) ── */}
         <aside className="command-card active-route-panel">
           <div className="route-panel-header">
             <div>
@@ -459,7 +787,6 @@ export function RouteConfigPage() {
             <RouteIcon size={22} />
           </div>
 
-          {/* Forward / Reverse tabs */}
           <div className="segmented-control compact-tabs" role="tablist" aria-label="Route direction">
             <button
               type="button"
@@ -477,38 +804,50 @@ export function RouteConfigPage() {
             </button>
           </div>
 
-          {/* Route line cards */}
           <div className="route-line-list">
             {visibleLines.map((line) => {
               const activeRoute = getPrimaryRouteForLine(line, direction);
+
               return (
                 <article
                   key={line.id}
                   className={`route-line-card ${line.id === selectedLineId ? "selected" : ""}`}
-                  onClick={() => selectRouteLine(line.id as "fvr-pitx" | "fvr-stcruz")}
+                  onClick={() => selectRouteLine(line.id as MainRouteLineId)}
                 >
                   <div>
                     <strong>{line.shortLabel}</strong>
-                    <span>{line.routes.length} active direction records</span>
+                    <span>
+                      {activeRoute
+                        ? `${line.routes.length} active direction records`
+                        : `No ${direction} direction yet`}
+                    </span>
                   </div>
+
                   <div className="route-chip-row">
                     {line.chips.map((chip, index) => (
                       <span key={`${chip}-${index}`}>{chip}</span>
                     ))}
                   </div>
+
                   <footer>
-                    <span>
-                      {activeRoute ? formatWholePeso(activeRoute.price) : "No fare"}
-                    </span>
+                    <span>{activeRoute ? formatWholePeso(activeRoute.price) : "Not set"}</span>
                     <button
                       type="button"
                       className="soft-button table-action"
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (activeRoute) fillFormFromRoute(activeRoute);
+                        setSelectedLineId(line.id as MainRouteLineId);
+
+                        if (activeRoute) {
+                          setSelectedRouteId(activeRoute.id);
+                          setMessage("Selected route is now shown on the map. Use Manual edit route to update its path.");
+                        } else {
+                          setSelectedRouteId(null);
+                          setMessage(`No ${direction} route exists yet. Click Use reference route path to create it.`);
+                        }
                       }}
                     >
-                      <Pencil size={14} /> Edit
+                      <MapPinned size={14} /> Preview
                     </button>
                   </footer>
                 </article>
@@ -519,79 +858,118 @@ export function RouteConfigPage() {
           <button
             type="button"
             className="soft-button advanced-route-toggle"
-            onClick={() => setShowHiddenRoutes((v) => !v)}
+            onClick={() => setShowHiddenRoutes((value) => !value)}
           >
             {showHiddenRoutes ? <EyeOff size={16} /> : <Eye size={16} />}
-            {showHiddenRoutes
-              ? "Hide extra route lines"
-              : "Manage extra route lines"}
+            {showHiddenRoutes ? "Hide extra route lines" : "Manage extra route lines"}
           </button>
         </aside>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          FARE ROUTE EDITOR — hidden by default
-          Opens only on "Edit fare stop" or "Add fare stop"
-      ═══════════════════════════════════════════════════════════ */}
-      {showEditor && (
-        <section className="route-detail-grid">
+      <section className="command-card selected-route-summary" style={{ marginBottom: 18 }}>
+        <div className="section-heading compact">
+          <div>
+            <span>Selected route summary</span>
+            <h2>
+              {selectedRoute
+                ? getRouteDisplayName(selectedRoute)
+                : `${getRouteLineLabel(selectedLineId)} has no ${direction} route yet`}
+            </h2>
+          </div>
+        </div>
+
+        <dl>
+          <div>
+            <dt>Line</dt>
+            <dd>{getRouteLineLabel(selectedLineId)}</dd>
+          </div>
+          <div>
+            <dt>Direction</dt>
+            <dd>{direction}</dd>
+          </div>
+          <div>
+            <dt>Stops</dt>
+            <dd>{selectedRoute ? getRouteStopsLabel(selectedRoute) : `${selectedRouteSeed.origin} → ${selectedRouteSeed.destination}`}</dd>
+          </div>
+          <div>
+            <dt>Fare</dt>
+            <dd>{selectedRoute ? formatWholePeso(selectedRoute.price) : formatWholePeso(selectedRouteSeed.price)}</dd>
+          </div>
+          <div>
+            <dt>Distance</dt>
+            <dd>
+              {selectedRoute?.distanceKm || selectedRoute?.distance
+                ? `${formatNumber(selectedRoute.distanceKm || selectedRoute.distance || 0)} km`
+                : "Auto-computed after saving route path"}
+            </dd>
+          </div>
+          <div>
+            <dt>Duration</dt>
+            <dd>
+              {selectedRoute?.estimatedDurationMinutes
+                ? formatDuration(selectedRoute.estimatedDurationMinutes)
+                : "Auto-computed after saving route path"}
+            </dd>
+          </div>
+          <div>
+            <dt>Waypoints</dt>
+            <dd>{formatNumber(selectedRoute?.waypoints?.length || 0)}</dd>
+          </div>
+          <div>
+            <dt>Google Maps reference</dt>
+            <dd style={{ wordBreak: "break-all", fontSize: "0.76rem" }}>
+              {activeReferenceUrl || selectedRouteSeed.mapReferenceUrl || "Not set"}
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      {showEditor ? (
+        <section ref={editorRef} className="route-detail-grid">
           <div className="command-card">
             <div className="section-heading compact">
               <div>
-                <span>
-                  {editing ? "Edit selected fare stop" : "Add new fare stop"}
-                </span>
+                <span>{editing ? "Edit selected fare stop" : "Add new fare stop"}</span>
                 <h2>Fare route editor</h2>
               </div>
               <Waypoints size={21} />
             </div>
 
             <form className="stacked-form" onSubmit={submit}>
-              {/* Read-only header – line + direction */}
               <div className="form-readonly-header">
                 <label>
                   Selected line
-                  <input
-                    value={selectedLine?.label || ""}
-                    readOnly
-                    className="locked-input"
-                  />
+                  <input value={getRouteLineLabel(selectedLineId)} readOnly className="locked-input" />
                 </label>
+
                 <label>
                   Direction
-                  <input
-                    value={direction}
-                    readOnly
-                    className="locked-input"
-                  />
+                  <input value={direction} readOnly className="locked-input" />
                 </label>
-                {editing?.source === "legacy" && form.destination && (
+
+                {editingExtra?.source === "legacy" && form.destination ? (
                   <p className="form-hint friendly-message" style={{ marginTop: 4 }}>
-                    ✓ Editing fare stop: {form.origin} → {form.destination}
+                    Editing fare stop: {form.origin} → {form.destination}
                   </p>
-                )}
+                ) : null}
               </div>
 
-              {/* Editable fields */}
               <div className="form-row">
                 <label>
                   Origin
                   <input
                     value={form.origin}
-                    onChange={(e) =>
-                      setForm((c) => ({ ...c, origin: e.target.value }))
-                    }
+                    onChange={(event) => setForm((current) => ({ ...current, origin: event.target.value }))}
                     placeholder="FVR"
                     required
                   />
                 </label>
+
                 <label>
                   Destination / Drop-off
                   <input
                     value={form.destination}
-                    onChange={(e) =>
-                      setForm((c) => ({ ...c, destination: e.target.value }))
-                    }
+                    onChange={(event) => setForm((current) => ({ ...current, destination: event.target.value }))}
                     placeholder="PITX"
                     required
                   />
@@ -600,12 +978,10 @@ export function RouteConfigPage() {
 
               <div className="form-row">
                 <label>
-                  Fare (whole peso)
+                  Fare whole peso
                   <input
                     value={form.price}
-                    onChange={(e) =>
-                      setForm((c) => ({ ...c, price: e.target.value }))
-                    }
+                    onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))}
                     type="number"
                     min="1"
                     step="1"
@@ -613,62 +989,61 @@ export function RouteConfigPage() {
                     required
                   />
                 </label>
+
+                <label>
+                  Base fare whole peso
+                  <input
+                    value={form.baseFare}
+                    onChange={(event) => setForm((current) => ({ ...current, baseFare: event.target.value }))}
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="15"
+                  />
+                </label>
               </div>
 
-              {/* Read-only computed fields */}
               <div className="form-row">
                 <label>
-                  Distance (auto-computed)
+                  Distance auto-computed
                   <input
-                    value={
-                      form.distanceKm
-                        ? `${Number(form.distanceKm).toFixed(1)} km`
-                        : ""
-                    }
+                    value={form.distanceKm ? `${Number(form.distanceKm).toFixed(1)} km` : ""}
                     readOnly
-                    placeholder="Auto-computed from route"
+                    placeholder="Auto-computed from saved route"
                     className="locked-input"
                   />
                 </label>
+
                 <label>
-                  Duration (auto-computed)
+                  Duration auto-computed
                   <input
-                    value={
-                      form.estimatedDurationMinutes
-                        ? formatDuration(form.estimatedDurationMinutes)
-                        : ""
-                    }
+                    value={form.estimatedDurationMinutes ? formatDuration(form.estimatedDurationMinutes) : ""}
                     readOnly
-                    placeholder="Auto-computed from route"
+                    placeholder="Auto-computed from saved route"
                     className="locked-input"
                   />
                 </label>
               </div>
 
-              {/* Google Maps reference */}
               <label>
                 Google Maps Link Reference
                 <input
                   type="url"
                   value={form.mapReferenceUrl}
-                  onChange={(e) =>
-                    setForm((c) => ({ ...c, mapReferenceUrl: e.target.value }))
-                  }
+                  onChange={(event) => setForm((current) => ({ ...current, mapReferenceUrl: event.target.value }))}
                   placeholder="https://maps.app.goo.gl/..."
                 />
               </label>
-              {form.mapReferenceUrl && (
-                <p className="form-hint friendly-message" style={{ fontSize: "0.82rem" }}>
-                  Google Maps link is saved as reference. To match it exactly, plot the
-                  route manually or use a configured routing API.
-                </p>
-              )}
 
-              {form.estimatedDurationMinutes && (
+              <p className="form-hint friendly-message" style={{ fontSize: "0.82rem" }}>
+                Google Maps link is saved as reference only. It will not overwrite the saved route path unless you manually edit and save the route path.
+              </p>
+
+              {form.estimatedDurationMinutes ? (
                 <p className="form-hint friendly-message" style={{ fontSize: "0.82rem" }}>
-                  📍 Estimated: {formatDuration(form.estimatedDurationMinutes)} with traffic
+                  Estimated: {formatDuration(form.estimatedDurationMinutes)} with traffic
                 </p>
-              )}
+              ) : null}
 
               <div className="inline-actions">
                 <button className="primary-action" type="submit">
@@ -676,120 +1051,32 @@ export function RouteConfigPage() {
                   {editing ? "Save changes" : "Add fare stop"}
                 </button>
 
-                <button
-                  type="button"
-                  className="soft-button"
-                  onClick={closeEditor}
-                >
+                <button type="button" className="soft-button" onClick={closeEditor}>
                   Close editor
                 </button>
 
-                {editing && editing.source !== "legacy" && (
-                  <button
-                    type="button"
-                    className="soft-button"
-                    onClick={() => syncRoute(editing)}
-                  >
+                {editingExtra?.source === "admin" && editing ? (
+                  <button type="button" className="soft-button" onClick={() => syncRoute(editing)}>
                     <RefreshCw size={16} /> Sync route
                   </button>
-                )}
+                ) : null}
               </div>
             </form>
           </div>
-
-          {/* Selected route summary */}
-          <aside className="command-card selected-route-summary">
-            <div className="section-heading compact">
-              <div>
-                <span>Selected route</span>
-                <h2>
-                  {selectedRoute
-                    ? getRouteDisplayName(selectedRoute)
-                    : "No route selected"}
-                </h2>
-              </div>
-            </div>
-            <dl>
-              <div>
-                <dt>Direction</dt>
-                <dd>{selectedRoute?.direction || direction}</dd>
-              </div>
-              <div>
-                <dt>Stops</dt>
-                <dd>{getRouteStopsLabel(selectedRoute)}</dd>
-              </div>
-              <div>
-                <dt>Fare</dt>
-                <dd>
-                  {selectedRoute
-                    ? formatWholePeso(selectedRoute.price)
-                    : "Not set"}
-                </dd>
-              </div>
-              <div>
-                <dt>Distance</dt>
-                <dd>
-                  {form.distanceKm
-                    ? `${formatNumber(Number(form.distanceKm))} km`
-                    : selectedRoute?.distanceKm || selectedRoute?.distance
-                    ? `${formatNumber(
-                        (selectedRoute.distanceKm || selectedRoute.distance || 0)
-                      )} km`
-                    : "Not set"}
-                </dd>
-              </div>
-              <div>
-                <dt>Duration</dt>
-                <dd>
-                  {form.estimatedDurationMinutes
-                    ? formatDuration(form.estimatedDurationMinutes)
-                    : selectedRoute?.estimatedDurationMinutes
-                    ? formatDuration(selectedRoute.estimatedDurationMinutes)
-                    : "Not set"}
-                </dd>
-              </div>
-              <div>
-                <dt>Waypoints</dt>
-                <dd>{formatNumber(selectedRoute?.waypoints?.length || 0)}</dd>
-              </div>
-              <div>
-                <dt>Map reference</dt>
-                <dd style={{ wordBreak: "break-all", fontSize: "0.76rem" }}>
-                  {selectedRoute?.mapReferenceUrl
-                    ? selectedRoute.mapReferenceUrl
-                    : ROUTE_GOOGLE_MAP_REFS[selectedLineId] || "Not set"}
-                </dd>
-              </div>
-            </dl>
-            {selectedRoute && (
-              <button
-                type="button"
-                className="soft-button"
-                onClick={() => fillFormFromRoute(selectedRoute)}
-              >
-                <Pencil size={15} /> Edit selected route
-              </button>
-            )}
-          </aside>
         </section>
-      )}
+      ) : null}
 
-      {/* ═══════════════════════════════════════════════════════════
-          FARE STOP MATRIX
-      ═══════════════════════════════════════════════════════════ */}
       <section className="command-card fare-matrix-panel">
         <div className="section-heading compact">
           <div>
             <span>
-              Showing fare stops for: {selectedLine?.label} (
-              {direction === "forward" ? "Forward" : "Reverse"})
+              Showing fare stops for: {getRouteLineLabel(selectedLineId)} ({direction === "forward" ? "Forward" : "Reverse"})
             </span>
             <h2>Fare Stop Matrix</h2>
           </div>
         </div>
 
-        {/* ── Delete confirmation ── */}
-        {deleteConfirmRow && (
+        {deleteConfirmRow ? (
           <div
             className="command-card"
             style={{
@@ -802,47 +1089,38 @@ export function RouteConfigPage() {
             <p style={{ margin: "0 0 8px", fontWeight: 700 }}>
               Delete this fare stop?
             </p>
+
             <p style={{ margin: "0 0 12px", color: "var(--muted)" }}>
               Conductors will no longer see this destination.
               <br />
               <strong style={{ color: "var(--text)" }}>
-                {normalizeRouteLabel(deleteConfirmRow.origin)} →{" "}
-                {normalizeRouteLabel(deleteConfirmRow.destination)}
+                {normalizeRouteLabel(deleteConfirmRow.origin)} → {normalizeRouteLabel(deleteConfirmRow.destination)}
               </strong>
             </p>
+
             <div className="inline-actions">
               <button
                 type="button"
                 className="primary-action"
-                style={{
-                  background: "var(--red)",
-                  boxShadow: "none"
-                }}
+                style={{ background: "var(--red)", boxShadow: "none" }}
                 onClick={confirmDeleteFareStop}
                 disabled={isDeleting}
               >
                 <Trash2 size={15} />
-                {isDeleting ? "Deleting…" : "Delete fare stop"}
+                {isDeleting ? "Deleting..." : "Delete fare stop"}
               </button>
-              <button
-                type="button"
-                className="soft-button"
-                onClick={cancelDelete}
-                disabled={isDeleting}
-              >
+
+              <button type="button" className="soft-button" onClick={cancelDelete} disabled={isDeleting}>
                 Cancel
               </button>
             </div>
           </div>
-        )}
+        ) : null}
 
         {visibleFareMatrixRows.length === 0 ? (
           <p className="friendly-message">
-            No fare stops found for{" "}
-            <strong>
-              {selectedLine?.label} ({direction})
-            </strong>
-            . Click &ldquo;Add fare stop&rdquo; below to create one.
+            No fare stops found for <strong>{getRouteLineLabel(selectedLineId)} ({direction})</strong>.
+            Click Add drop-off fare below to create one.
           </p>
         ) : (
           <DataTable
@@ -852,11 +1130,7 @@ export function RouteConfigPage() {
               {
                 header: "Direction",
                 cell: (row) => (
-                  <span
-                    className={`status-pill status-${
-                      row.direction === "forward" ? "active" : "pending"
-                    }`}
-                  >
+                  <span className={`status-pill status-${row.direction === "forward" ? "active" : "pending"}`}>
                     {row.direction}
                   </span>
                 )
@@ -881,9 +1155,7 @@ export function RouteConfigPage() {
                 header: "Source",
                 cell: (row) => (
                   <span style={{ fontSize: "0.76rem", color: "var(--muted)" }}>
-                    {row.direction === "forward"
-                      ? "Routes_Forward"
-                      : "Routes_Reverse"}
+                    {row.direction === "forward" ? "Routes_Forward" : "Routes_Reverse"}
                   </span>
                 )
               },
@@ -891,13 +1163,10 @@ export function RouteConfigPage() {
                 header: "Action",
                 cell: (row) => (
                   <div className="table-action-row">
-                    <button
-                      type="button"
-                      className="soft-button table-action"
-                      onClick={() => fillFormFromRoute(row)}
-                    >
+                    <button type="button" className="soft-button table-action" onClick={() => openEditorForFareStop(row)}>
                       <Pencil size={14} /> Edit fare stop
                     </button>
+
                     <button
                       type="button"
                       className="soft-button table-action"
@@ -915,15 +1184,12 @@ export function RouteConfigPage() {
 
         <div className="inline-actions" style={{ marginTop: "16px" }}>
           <button type="button" className="soft-button" onClick={openCreateFareStop}>
-            <Plus size={17} /> Add fare stop
+            <Plus size={17} /> Add drop-off fare
           </button>
         </div>
       </section>
 
-      {/* ═══════════════════════════════════════════════════════════
-          HIDDEN / EXTRA ROUTES (advanced)
-      ═══════════════════════════════════════════════════════════ */}
-      {showHiddenRoutes && (
+      {showHiddenRoutes ? (
         <section className="command-card">
           <div className="section-heading compact">
             <div>
@@ -931,6 +1197,7 @@ export function RouteConfigPage() {
               <h2>Hidden / extra route lines</h2>
             </div>
           </div>
+
           <DataTable
             rows={hiddenLine?.routes || []}
             getRowKey={(row) => row.id}
@@ -954,9 +1221,7 @@ export function RouteConfigPage() {
               {
                 header: "Status",
                 cell: (row) => (
-                  <span
-                    className={`status-pill status-${row.status || "inactive"}`}
-                  >
+                  <span className={`status-pill status-${row.status || "inactive"}`}>
                     {row.status || "inactive"}
                   </span>
                 )
@@ -965,18 +1230,11 @@ export function RouteConfigPage() {
                 header: "Action",
                 cell: (row) => (
                   <div className="table-action-row">
-                    <button
-                      type="button"
-                      className="soft-button table-action"
-                      onClick={() => fillFormFromRoute(row)}
-                    >
+                    <button type="button" className="soft-button table-action" onClick={() => openEditorForAdminRoute(row)}>
                       <Pencil size={14} /> Edit
                     </button>
-                    <button
-                      type="button"
-                      className="soft-button table-action"
-                      onClick={() => setStatus(row, "active")}
-                    >
+
+                    <button type="button" className="soft-button table-action" onClick={() => setStatus(row, "active")}>
                       <Eye size={14} /> Show
                     </button>
                   </div>
@@ -985,7 +1243,7 @@ export function RouteConfigPage() {
             ]}
           />
         </section>
-      )}
+      ) : null}
     </AppShell>
   );
 }

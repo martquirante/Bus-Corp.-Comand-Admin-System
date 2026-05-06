@@ -2,6 +2,9 @@ import type { RouteConfig } from "@pos-bus/shared";
 
 export type MainRouteLineId = "fvr-pitx" | "fvr-stcruz" | "hidden";
 
+type RouteAny = RouteConfig & Record<string, any>;
+type PointAny = Record<string, any>;
+
 export type MainRouteLine = {
   id: MainRouteLineId;
   label: string;
@@ -11,33 +14,18 @@ export type MainRouteLine = {
   routes: RouteConfig[];
 };
 
-// ─── Google Maps reference links per route line ──────────────────────────────
-// These are stored as metadata only – they do NOT auto-overwrite waypoints.
-// Admin must click "Recalculate path" + "Save route path" for that.
 export const ROUTE_GOOGLE_MAP_REFS: Record<"fvr-pitx" | "fvr-stcruz", string> = {
   "fvr-pitx": "https://maps.app.goo.gl/afMZornDfTm4Rpzh9",
   "fvr-stcruz": "https://maps.app.goo.gl/aAXkcU3hhThpB9RG7"
 };
 
-const normalize = (value?: string) =>
-  String(value || "")
-    .toLowerCase()
-    .replace(/pitix/g, "pitx")
-    .replace(/\s+/g, " ")
-    .trim();
-
-export const normalizeRouteLabel = (value?: string) =>
-  String(value || "")
-    .replace(/PITIX/gi, "PITX")
-    .replace(/St\.? ?Cruz/gi, "ST. CRUZ")
-    .replace(/FVR Terminal/gi, "FVR")
-    .trim();
-
 const PITX_KEYWORDS = ["pitx", "pitix"];
+
 const STCRUZ_KEYWORDS = [
   "st cruz",
   "st. cruz",
   "st-cruz",
+  "stcruz",
   "muzon",
   "sampol",
   "area e",
@@ -48,23 +36,146 @@ const STCRUZ_KEYWORDS = [
   "san jose",
   "sapang palay",
   "sjdm",
-  "san jose del monte"
+  "san jose del monte",
+  "marilao",
+  "balintawak",
+  "lacson",
+  "frenza",
+  "luma de gato",
+  "st cruz terminal",
+  "sta cruz",
+  "santa cruz"
 ];
 
-export function getFareStopLineId(route: RouteConfig): MainRouteLineId | "unknown" {
-  const haystack = String(
+const normalize = (value?: string | number | null) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/pitix/g, "pitx")
+    .replace(/st\.?\s*cruz/g, "st cruz")
+    .replace(/sta\.?\s*cruz/g, "st cruz")
+    .replace(/santa\s+cruz/g, "st cruz")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+export const normalizeRouteLabel = (value?: string | number | null) =>
+  String(value || "")
+    .replace(/PITIX/gi, "PITX")
+    .replace(/Pitix/gi, "PITX")
+    .replace(/St\.? ?Cruz/gi, "ST. CRUZ")
+    .replace(/Sta\.? ?Cruz/gi, "ST. CRUZ")
+    .replace(/Santa Cruz/gi, "ST. CRUZ")
+    .replace(/FVR Terminal/gi, "FVR")
+    .trim();
+
+const normalizeLineId = (value?: string | null): MainRouteLineId | null => {
+  const lineId = normalize(value);
+
+  if (
+    lineId === "fvr pitx" ||
+    lineId === "fvr pitix" ||
+    lineId === "pitx" ||
+    lineId === "pitix" ||
+    lineId === "fvr pitx fvr"
+  ) {
+    return "fvr-pitx";
+  }
+
+  if (
+    lineId === "fvr stcruz" ||
+    lineId === "fvr st cruz" ||
+    lineId === "fvr st cruz fvr" ||
+    lineId === "fvr muzon st cruz" ||
+    lineId === "fvr muzon st cruz fvr" ||
+    lineId === "stcruz" ||
+    lineId === "st cruz" ||
+    lineId === "muzon"
+  ) {
+    return "fvr-stcruz";
+  }
+
+  if (lineId === "hidden") return "hidden";
+
+  return null;
+};
+
+const getRouteExtra = (route: RouteConfig) => route as RouteAny;
+
+const buildRouteSearchText = (route: RouteConfig) => {
+  const extra = getRouteExtra(route);
+
+  const stops = ((route.stops || []) as PointAny[]).map((stop) =>
+    [
+      stop.id,
+      stop.name,
+      stop.origin,
+      stop.destination,
+      stop.lineId,
+      stop.legacyKey
+    ].join(" ")
+  );
+
+  const waypoints = ((route.waypoints || []) as PointAny[]).map((point) =>
+    [
+      point.id,
+      point.name,
+      point.origin,
+      point.destination,
+      point.lineId,
+      point.legacyKey
+    ].join(" ")
+  );
+
+  return normalize(
     [
       route.id,
+      extra.lineId,
+      extra.routeGroup,
       route.routeName,
       route.origin,
       route.destination,
       route.legacyKey,
-      route.legacyPath
+      route.legacyPath,
+      route.mapReferenceUrl,
+      extra.googleMapReferenceUrl,
+      ...stops,
+      ...waypoints
     ].join(" ")
-  ).toLowerCase();
+  );
+};
 
-  if (PITX_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-pitx";
-  if (STCRUZ_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-stcruz";
+const hasAnyKeyword = (text: string, keywords: string[]) =>
+  keywords.some((keyword) => text.includes(normalize(keyword)));
+
+const getExplicitLineId = (route: RouteConfig): MainRouteLineId | null => {
+  const extra = getRouteExtra(route);
+
+  const fromLineId = normalizeLineId(extra.lineId);
+  if (fromLineId) return fromLineId;
+
+  const fromRouteGroup = normalizeLineId(extra.routeGroup);
+  if (fromRouteGroup) return fromRouteGroup;
+
+  return null;
+};
+
+export function getFareStopLineId(route: RouteConfig): MainRouteLineId | "unknown" {
+  const explicit = getExplicitLineId(route);
+
+  if (explicit === "fvr-pitx" || explicit === "fvr-stcruz") {
+    return explicit;
+  }
+
+  const haystack = buildRouteSearchText(route);
+
+  if (hasAnyKeyword(haystack, PITX_KEYWORDS)) {
+    return "fvr-pitx";
+  }
+
+  if (hasAnyKeyword(haystack, STCRUZ_KEYWORDS)) {
+    return "fvr-stcruz";
+  }
+
   return "unknown";
 }
 
@@ -72,23 +183,44 @@ export function filterFareStopsBySelectedLine(
   fareMatrixRows: RouteConfig[],
   selectedLineId: MainRouteLineId
 ) {
-  return fareMatrixRows.filter((row) => getFareStopLineId(row) === selectedLineId);
+  return fareMatrixRows.filter((row) => {
+    const rowLineId = getFareStopLineId(row);
+
+    if (selectedLineId === "hidden") {
+      return rowLineId === "unknown";
+    }
+
+    return rowLineId === selectedLineId;
+  });
+}
+
+export function filterFareStopsBySelectedLineAndDirection(
+  fareMatrixRows: RouteConfig[],
+  selectedLineId: MainRouteLineId,
+  direction: RouteConfig["direction"]
+) {
+  return filterFareStopsBySelectedLine(fareMatrixRows, selectedLineId).filter(
+    (row) => row.direction === direction
+  );
 }
 
 export function getMainRouteLineId(route: RouteConfig): MainRouteLineId {
-  const haystack = normalize(
-    [
-      route.id,
-      route.routeName,
-      route.origin,
-      route.destination,
-      ...(route.stops || []).map((stop) => stop.name),
-      ...(route.waypoints || []).map((point) => point.name)
-    ].join(" ")
-  );
+  const explicit = getExplicitLineId(route);
 
-  if (PITX_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-pitx";
-  if (STCRUZ_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-stcruz";
+  if (explicit) {
+    return explicit;
+  }
+
+  const haystack = buildRouteSearchText(route);
+
+  if (hasAnyKeyword(haystack, PITX_KEYWORDS)) {
+    return "fvr-pitx";
+  }
+
+  if (hasAnyKeyword(haystack, STCRUZ_KEYWORDS)) {
+    return "fvr-stcruz";
+  }
+
   return "hidden";
 }
 
@@ -122,29 +254,37 @@ export function groupMainRouteLines(routes: RouteConfig[]): MainRouteLine[] {
       id: "hidden",
       label: "Hidden / extra route lines",
       shortLabel: "Advanced route list",
-      description: "Inactive, archived, or extra admin route records",
+      description: "Inactive, archived, unlinked, or extra admin route records",
       chips: ["Advanced"],
       routes: hiddenRoutes
     }
   ];
 }
 
+/**
+ * IMPORTANT:
+ * Do not fallback to line.routes[0].
+ *
+ * If admin selected Reverse but no reverse AdminRoute exists yet, returning
+ * the forward route makes the map show wrong Start/End markers. Returning null
+ * is safer because the UI can show "missing route direction" instead.
+ */
 export function getPrimaryRouteForLine(
-  line: MainRouteLine,
+  line: MainRouteLine | undefined | null,
   direction: RouteConfig["direction"]
 ) {
-  return (
-    line.routes.find((route) => route.direction === direction) ||
-    line.routes[0] ||
-    null
-  );
+  if (!line) return null;
+
+  return line.routes.find((route) => route.direction === direction) || null;
 }
 
 export function getRouteStopsLabel(route?: RouteConfig | null) {
   if (!route) return "No route selected";
+
   const stops = route.stops?.length
     ? route.stops.map((stop) => stop.name).filter(Boolean)
     : [route.origin, route.destination];
+
   return stops.map(normalizeRouteLabel).join(" → ");
 }
 
@@ -152,4 +292,33 @@ export function getRouteDisplayName(route: RouteConfig) {
   return normalizeRouteLabel(
     route.routeName || `${route.origin} to ${route.destination}`
   );
+}
+
+export function getRouteLineLabel(lineId?: MainRouteLineId | string | null) {
+  const normalized = normalizeLineId(lineId || "");
+
+  if (normalized === "fvr-pitx") return "FVR ↔ PITX";
+  if (normalized === "fvr-stcruz") return "FVR ↔ MUZON ↔ ST. CRUZ";
+  if (normalized === "hidden") return "Hidden / extra route line";
+
+  return "Unlinked route line";
+}
+
+export function getRouteLineShortLabel(lineId?: MainRouteLineId | string | null) {
+  const normalized = normalizeLineId(lineId || "");
+
+  if (normalized === "fvr-pitx") return "FVR - PITX - FVR";
+  if (normalized === "fvr-stcruz") return "FVR - MUZON - ST. CRUZ - FVR";
+  if (normalized === "hidden") return "Advanced route list";
+
+  return "Unlinked route";
+}
+
+export function getGoogleMapReferenceForLine(lineId?: MainRouteLineId | string | null) {
+  const normalized = normalizeLineId(lineId || "");
+
+  if (normalized === "fvr-pitx") return ROUTE_GOOGLE_MAP_REFS["fvr-pitx"];
+  if (normalized === "fvr-stcruz") return ROUTE_GOOGLE_MAP_REFS["fvr-stcruz"];
+
+  return "";
 }

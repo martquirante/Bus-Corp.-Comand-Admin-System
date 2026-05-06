@@ -23,6 +23,14 @@ export type AdminRole =
 
 export type RouteStatus = "active" | "inactive" | "archived";
 
+export type RouteDirection = "forward" | "reverse";
+
+export type MainRouteLineId = "fvr-pitx" | "fvr-stcruz" | "hidden" | string;
+
+export type BusType = "aircon" | "ordinary";
+
+export type PassengerFareType = "regular" | "student" | "senior" | "pwd" | "discounted";
+
 export interface DashboardStats {
   totalRevenue: number;
   totalExpenses: number;
@@ -54,6 +62,9 @@ export interface FleetBus {
   passengers: number;
   lastUpdate: number;
   heading?: number;
+  busType?: BusType | string;
+  assignedRouteId?: string;
+  lineId?: MainRouteLineId;
 }
 
 export interface TransactionLog {
@@ -71,34 +82,133 @@ export interface TransactionLog {
   amount: number;
   tripId?: string;
   deviceId?: string;
+  busType?: BusType | string;
+  lineId?: MainRouteLineId;
 }
 
+/**
+ * Main route config model.
+ *
+ * Important:
+ * - AdminRoutes uses this for actual map route lines / saved waypoints.
+ * - Routes_Forward and Routes_Reverse can also normalize into this shape
+ *   for conductor fare stop matrix rows.
+ */
 export interface RouteConfig {
   id: string;
-  direction: "forward" | "reverse";
+  direction: RouteDirection;
+
+  /**
+   * Main route grouping used by Route Config, Fare Stop Matrix, and Live Fleet Map.
+   *
+   * fvr-pitx:
+   * - FVR -> PITX
+   * - PITX -> FVR
+   *
+   * fvr-stcruz:
+   * - FVR -> MUZON -> ST. CRUZ
+   * - ST. CRUZ -> MUZON -> FVR
+   *
+   * hidden:
+   * - extra/legacy/advanced route records
+   */
+  lineId?: MainRouteLineId;
+
+  /**
+   * Optional legacy/fallback grouping label.
+   * Useful for old Firebase rows that existed before lineId.
+   */
+  routeGroup?: string;
+
   routeName?: string;
   origin: string;
   destination: string;
   price: number;
+
+  /**
+   * Distance fields.
+   * distance is kept for legacy compatibility.
+   * distanceKm should be the preferred field.
+   */
   distance?: number;
   distanceKm?: number;
+
+  /**
+   * Duration in minutes.
+   * UI should format this as:
+   * 45 min
+   * 1 hr 10 min
+   * 2 hr
+   */
   estimatedDurationMinutes?: number;
+
+  /**
+   * Optional traffic-aware estimate in minutes.
+   */
+  trafficDurationMinutes?: number;
+
   baseFare?: number;
+
+  /**
+   * Kept only for backwards compatibility.
+   * New UI should not expose farePerKm as a main field.
+   */
   farePerKm?: number;
+
   status?: RouteStatus;
   isViceVersa?: boolean;
   reverseRouteId?: string;
+
+  /**
+   * Google Maps reference link or other map reference.
+   * This is metadata only. It should not automatically overwrite saved waypoints.
+   */
   mapReferenceUrl?: string;
+
+  /**
+   * Alias used by some Route Config code.
+   */
+  googleMapReferenceUrl?: string;
+
   assignedBusId?: string;
   assignedTripScheduleId?: string;
+
+  /**
+   * Ordered fare/drop-off stops.
+   */
   stops?: RouteWaypoint[];
+
+  /**
+   * Actual map geometry points for route polyline.
+   */
   waypoints?: RouteWaypoint[];
+
+  /**
+   * Optional encoded polyline if routing provider returns one.
+   * Saved waypoints remain the safer fallback.
+   */
+  encodedPolyline?: string;
+
+  /**
+   * Optional raw provider/source info for route geometry.
+   */
+  routeGeometrySource?: "manual" | "google-routes" | "osrm" | "openrouteservice" | "supabase" | "firebase" | string;
+
+  /**
+   * Tells the UI/backend where this normalized record came from.
+   */
   source?: "legacy" | "admin" | "default" | "supabase";
+
+  /**
+   * For conductor fare matrix rows from Firebase.
+   */
   legacyPath?: "Routes_Forward" | "Routes_Reverse";
   legacyKey?: string;
+
   createdAt?: string;
   updatedAt?: string;
   createdBy?: string;
+  updatedBy?: string;
 }
 
 export interface RouteWaypoint {
@@ -108,6 +218,22 @@ export interface RouteWaypoint {
   lng?: number;
   sequence?: number;
   type?: "origin" | "stop" | "destination" | "waypoint";
+
+  /**
+   * Optional fare stop/drop-off metadata.
+   * Useful when displaying fare stops on the map.
+   */
+  fare?: number;
+  source?: "AdminRoutes" | "Routes_Forward" | "Routes_Reverse" | string;
+  legacyKey?: string;
+  lineId?: MainRouteLineId;
+  direction?: RouteDirection;
+
+  /**
+   * For marker display and matching against fare matrix rows.
+   */
+  origin?: string;
+  destination?: string;
 }
 
 export interface AdminAccount {
@@ -211,8 +337,16 @@ export interface BusFleetRecord {
   id: string;
   busNumber: string;
   plateNumber?: string;
-  busType?: string;
+
+  /**
+   * Used for LTFRB fare computation.
+   * Default should be aircon if missing.
+   */
+  busType?: BusType | string;
+
   routeLine?: string;
+  lineId?: MainRouteLineId;
+
   seatingCapacity?: number;
   standingCapacity?: number;
   currentPassengerCount?: number;
