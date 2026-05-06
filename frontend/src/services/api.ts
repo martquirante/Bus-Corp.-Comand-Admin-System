@@ -14,6 +14,7 @@ import type {
   LegacyNotification,
   RevenueReport,
   RouteConfig,
+  RouteWaypoint,
   TransactionLog
 } from "@pos-bus/shared";
 
@@ -58,11 +59,26 @@ type SqlSyncResult = {
   summary: Record<string, unknown>;
 };
 
+// ─── Route path payload types ─────────────────────────────────────────────────
+export type RoutePathPayload = {
+  waypoints: NonNullable<RouteConfig["waypoints"]>;
+  distanceKm?: number;
+  estimatedDurationMinutes?: number;
+  googleMapReferenceUrl?: string;
+};
+
+export type RouteRecalculateResult = {
+  preview: boolean;
+  routeId: string;
+  waypoints: NonNullable<RouteConfig["waypoints"]>;
+  distanceKm?: number;
+  estimatedDurationMinutes?: number;
+};
+
 const getToken = () => {
   if (typeof window === "undefined") return "";
   const stored = window.localStorage.getItem(SESSION_KEY);
   if (!stored) return "";
-
   try {
     return (JSON.parse(stored) as SessionPayload).token || "";
   } catch {
@@ -85,11 +101,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelop
   });
 
   const payload = await response.json();
-
   if (!response.ok) {
     throw new Error(payload?.error?.message || "API request failed.");
   }
-
   return payload as ApiEnvelope<T>;
 }
 
@@ -106,9 +120,7 @@ export const api = {
   },
 
   async syncRealtimeToSql() {
-    return apiFetch<SqlSyncResult>("/sync/firebase-to-supabase", {
-      method: "POST"
-    });
+    return apiFetch<SqlSyncResult>("/sync/firebase-to-supabase", { method: "POST" });
   },
 
   async login(email: string, password: string) {
@@ -134,7 +146,9 @@ export const api = {
     return apiFetch<FleetBus[]>("/fleet/live");
   },
 
-  async transactions(filters?: Partial<{ bus: string; type: string; route: string; limit: number }>) {
+  async transactions(
+    filters?: Partial<{ bus: string; type: string; route: string; limit: number }>
+  ) {
     const query = new URLSearchParams();
     Object.entries(filters || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== "") query.set(key, String(value));
@@ -151,19 +165,25 @@ export const api = {
   },
 
   async getRouteWaypoints(id: string) {
-    return apiFetch<NonNullable<RouteConfig["waypoints"]>>(`/routes/${encodeURIComponent(id)}/waypoints`);
+    return apiFetch<NonNullable<RouteConfig["waypoints"]>>(
+      `/routes/${encodeURIComponent(id)}/waypoints`
+    );
   },
 
   async getRouteStops(id: string) {
-    return apiFetch<NonNullable<RouteConfig["stops"]>>(`/routes/${encodeURIComponent(id)}/stops`);
+    return apiFetch<NonNullable<RouteConfig["stops"]>>(
+      `/routes/${encodeURIComponent(id)}/stops`
+    );
   },
 
   async syncRouteToSupabase(id: string) {
-    return apiFetch<Record<string, unknown>>(`/routes/${encodeURIComponent(id)}/sync-to-supabase`, {
-      method: "POST"
-    });
+    return apiFetch<Record<string, unknown>>(
+      `/routes/${encodeURIComponent(id)}/sync-to-supabase`,
+      { method: "POST" }
+    );
   },
 
+  // ─── Legacy (Routes_Forward / Routes_Reverse) ───────────────────────────
   async getLegacyRoutesForward() {
     return apiFetch<RouteConfig[]>("/routes/legacy/forward");
   },
@@ -172,13 +192,41 @@ export const api = {
     return apiFetch<RouteConfig[]>("/routes/legacy/reverse");
   },
 
-  async updateLegacyRoute(direction: RouteConfig["direction"], key: string, payload: Partial<RouteConfig>) {
-    return apiFetch<RouteConfig>(`/routes/legacy/${encodeURIComponent(direction)}/${encodeURIComponent(key)}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload)
-    });
+  /** PATCH Routes_Forward/:key or Routes_Reverse/:key */
+  async updateLegacyRoute(
+    direction: RouteConfig["direction"],
+    key: string,
+    payload: Partial<RouteConfig>
+  ) {
+    return apiFetch<RouteConfig>(
+      `/routes/legacy/${encodeURIComponent(direction)}/${encodeURIComponent(key)}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    );
   },
 
+  /** POST Routes_Forward or Routes_Reverse – creates a new fare stop row */
+  async createLegacyRoute(
+    direction: RouteConfig["direction"],
+    payload: Partial<RouteConfig>
+  ) {
+    return apiFetch<RouteConfig>(
+      `/routes/legacy/${encodeURIComponent(direction)}`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  /** DELETE Routes_Forward/:key or Routes_Reverse/:key */
+  async deleteLegacyRoute(
+    direction: RouteConfig["direction"],
+    key: string
+  ) {
+    return apiFetch<{ deleted: true; direction: string; key: string }>(
+      `/routes/legacy/${encodeURIComponent(direction)}/${encodeURIComponent(key)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  // ─── AdminRoutes ─────────────────────────────────────────────────────────
   async createRoute(payload: Omit<RouteConfig, "id">) {
     return apiFetch<RouteConfig>("/routes", {
       method: "POST",
@@ -187,9 +235,52 @@ export const api = {
   },
 
   async updateRoute(id: string, payload: Partial<RouteConfig>) {
-    return apiFetch<RouteConfig>(`/routes/${id}`, {
+    return apiFetch<RouteConfig>(`/routes/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
+    });
+  },
+
+  /**
+   * PATCH /routes/:id/path
+   * Saves waypoints/polyline to AdminRoutes. Also updates distanceKm,
+   * estimatedDurationMinutes, and googleMapReferenceUrl if provided.
+   * This is the canonical "Save route path" endpoint.
+   */
+  async updateRoutePath(id: string, payload: RoutePathPayload) {
+    return apiFetch<RouteConfig>(`/routes/${encodeURIComponent(id)}/path`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  /**
+   * POST /routes/:id/recalculate-path
+   * Server-side recalculate gate. Returns a preview object.
+   * Does NOT overwrite the saved route – admin must confirm via updateRoutePath.
+   */
+  async recalculateRoutePath(
+    id: string,
+    payload: {
+      origin?: string;
+      destination?: string;
+      waypoints?: NonNullable<RouteConfig["waypoints"]>;
+    }
+  ) {
+    return apiFetch<RouteRecalculateResult>(
+      `/routes/${encodeURIComponent(id)}/recalculate-path`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+  },
+
+  /**
+   * PATCH /routes/:id/reference
+   * Saves googleMapReferenceUrl as metadata only. Does NOT alter waypoints.
+   */
+  async updateRouteReference(id: string, googleMapReferenceUrl: string) {
+    return apiFetch<RouteConfig>(`/routes/${encodeURIComponent(id)}/reference`, {
+      method: "PATCH",
+      body: JSON.stringify({ googleMapReferenceUrl })
     });
   },
 
@@ -200,6 +291,7 @@ export const api = {
     });
   },
 
+  // ─── Legacy helpers (kept for backward compat) ───────────────────────────
   async getAssistanceRequests() {
     return apiFetch<Record<string, LegacyAssistanceRequest>>("/legacy/assistance-requests");
   },
@@ -277,15 +369,14 @@ export const api = {
   },
 
   async markNotificationRead(id: string) {
-    return apiFetch<{ id: string; read: true }>(`/notifications/${encodeURIComponent(id)}/read`, {
-      method: "PATCH"
-    });
+    return apiFetch<{ id: string; read: true }>(
+      `/notifications/${encodeURIComponent(id)}/read`,
+      { method: "PATCH" }
+    );
   },
 
   async markAllNotificationsRead() {
-    return apiFetch<{ updated: number }>("/notifications/read-all", {
-      method: "PATCH"
-    });
+    return apiFetch<{ updated: number }>("/notifications/read-all", { method: "PATCH" });
   },
 
   async revenueReport() {
@@ -308,7 +399,7 @@ export const api = {
   },
 
   async patchAdmin(id: string, payload: Partial<AdminAccount>) {
-    return apiFetch<AdminAccount>(`/admin/accounts/${id}`, {
+    return apiFetch<AdminAccount>(`/admin/accounts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     });
@@ -355,13 +446,15 @@ export const api = {
   },
 
   async chatMessages(conversationId: string) {
-    return apiFetch<ChatMessage[]>(`/messages/conversations/${encodeURIComponent(conversationId)}`);
+    return apiFetch<ChatMessage[]>(
+      `/messages/conversations/${encodeURIComponent(conversationId)}`
+    );
   },
 
   async sendChatMessage(conversationId: string, payload: Partial<ChatMessage>) {
-    return apiFetch<ChatMessage>(`/messages/conversations/${encodeURIComponent(conversationId)}/send`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    return apiFetch<ChatMessage>(
+      `/messages/conversations/${encodeURIComponent(conversationId)}/send`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
   }
 };

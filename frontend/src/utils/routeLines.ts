@@ -11,6 +11,14 @@ export type MainRouteLine = {
   routes: RouteConfig[];
 };
 
+// ─── Google Maps reference links per route line ──────────────────────────────
+// These are stored as metadata only – they do NOT auto-overwrite waypoints.
+// Admin must click "Recalculate path" + "Save route path" for that.
+export const ROUTE_GOOGLE_MAP_REFS: Record<"fvr-pitx" | "fvr-stcruz", string> = {
+  "fvr-pitx": "https://maps.app.goo.gl/afMZornDfTm4Rpzh9",
+  "fvr-stcruz": "https://maps.app.goo.gl/aAXkcU3hhThpB9RG7"
+};
+
 const normalize = (value?: string) =>
   String(value || "")
     .toLowerCase()
@@ -55,19 +63,16 @@ export function getFareStopLineId(route: RouteConfig): MainRouteLineId | "unknow
     ].join(" ")
   ).toLowerCase();
 
-  if (PITX_KEYWORDS.some(kw => haystack.includes(kw))) {
-    return "fvr-pitx";
-  }
-
-  if (STCRUZ_KEYWORDS.some(kw => haystack.includes(kw))) {
-    return "fvr-stcruz";
-  }
-
+  if (PITX_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-pitx";
+  if (STCRUZ_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-stcruz";
   return "unknown";
 }
 
-export function filterFareStopsBySelectedLine(fareMatrixRows: RouteConfig[], selectedLineId: MainRouteLineId) {
-  return fareMatrixRows.filter(row => getFareStopLineId(row) === selectedLineId);
+export function filterFareStopsBySelectedLine(
+  fareMatrixRows: RouteConfig[],
+  selectedLineId: MainRouteLineId
+) {
+  return fareMatrixRows.filter((row) => getFareStopLineId(row) === selectedLineId);
 }
 
 export function getMainRouteLineId(route: RouteConfig): MainRouteLineId {
@@ -82,12 +87,8 @@ export function getMainRouteLineId(route: RouteConfig): MainRouteLineId {
     ].join(" ")
   );
 
-  if (PITX_KEYWORDS.some(kw => haystack.includes(kw))) return "fvr-pitx";
-
-  if (STCRUZ_KEYWORDS.some(kw => haystack.includes(kw))) {
-    return "fvr-stcruz";
-  }
-
+  if (PITX_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-pitx";
+  if (STCRUZ_KEYWORDS.some((kw) => haystack.includes(kw))) return "fvr-stcruz";
   return "hidden";
 }
 
@@ -128,7 +129,10 @@ export function groupMainRouteLines(routes: RouteConfig[]): MainRouteLine[] {
   ];
 }
 
-export function getPrimaryRouteForLine(line: MainRouteLine, direction: RouteConfig["direction"]) {
+export function getPrimaryRouteForLine(
+  line: MainRouteLine,
+  direction: RouteConfig["direction"]
+) {
   return (
     line.routes.find((route) => route.direction === direction) ||
     line.routes[0] ||
@@ -138,14 +142,14 @@ export function getPrimaryRouteForLine(line: MainRouteLine, direction: RouteConf
 
 export function getRouteStopsLabel(route?: RouteConfig | null) {
   if (!route) return "No route selected";
-
   const stops = route.stops?.length
     ? route.stops.map((stop) => stop.name).filter(Boolean)
     : [route.origin, route.destination];
-
   return stops.map(normalizeRouteLabel).join(" → ");
 }
 
 export function getRouteDisplayName(route: RouteConfig) {
-  return normalizeRouteLabel(route.routeName || `${route.origin} to ${route.destination}`);
+  return normalizeRouteLabel(
+    route.routeName || `${route.origin} to ${route.destination}`
+  );
 }
