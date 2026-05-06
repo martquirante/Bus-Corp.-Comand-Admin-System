@@ -9,6 +9,12 @@ export const routesRoutes = Router();
 routesRoutes.get("/", requireAuth, asyncHandler(routesController.getRoutes));
 routesRoutes.get("/legacy/forward", requireAuth, asyncHandler(routesController.getLegacyForward));
 routesRoutes.get("/legacy/reverse", requireAuth, asyncHandler(routesController.getLegacyReverse));
+routesRoutes.patch(
+  "/legacy/:direction/:key",
+  requireAuth,
+  requireRole("SuperAdmin", "Admin"),
+  asyncHandler(routesController.updateLegacyRoute)
+);
 routesRoutes.get("/:id/waypoints", requireAuth, asyncHandler(routesController.getRouteWaypoints));
 routesRoutes.get("/:id/stops", requireAuth, asyncHandler(routesController.getRouteStops));
 routesRoutes.get("/:id", requireAuth, asyncHandler(routesController.getRoute));

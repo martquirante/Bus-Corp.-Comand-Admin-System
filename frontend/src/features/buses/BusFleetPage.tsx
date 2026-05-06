@@ -11,7 +11,7 @@ import { DataTable } from "@/components/ui/DataTable";
 const emptyBus = {
   busNumber: "",
   plateNumber: "",
-  busType: "Aircon",
+  busType: "aircon",
   routeLine: "FVR to ST.CRUZ",
   seatingCapacity: "45",
   standingCapacity: "15",
@@ -78,7 +78,10 @@ export function BusFleetPage() {
             <div className="form-row">
               <label>
                 Bus type
-                <input value={form.busType} onChange={(event) => setForm((value) => ({ ...value, busType: event.target.value }))} />
+                <select value={form.busType} onChange={(event) => setForm((value) => ({ ...value, busType: event.target.value }))}>
+                  <option value="aircon">Aircon bus</option>
+                  <option value="ordinary">Ordinary bus</option>
+                </select>
               </label>
               <label>
                 Route line
@@ -147,6 +150,7 @@ export function BusFleetPage() {
           columns={[
             { header: "Bus", cell: (row) => <strong>{row.busNumber}</strong> },
             { header: "Plate", cell: (row) => row.plateNumber || "Not set" },
+            { header: "Type", cell: (row) => (row.busType || "aircon").toString().toLowerCase() === "ordinary" ? "Ordinary" : "Aircon" },
             { header: "Route", cell: (row) => row.routeLine || "Unassigned" },
             { header: "Capacity", cell: (row) => `${row.seatingCapacity || 0} seated / ${row.standingCapacity || 0} standing` },
             { header: "Fuel", cell: (row) => row.fuelType || "Not set" },

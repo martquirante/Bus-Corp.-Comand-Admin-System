@@ -107,6 +107,7 @@ export interface RouteWaypoint {
   lat?: number;
   lng?: number;
   sequence?: number;
+  type?: "origin" | "stop" | "destination" | "waypoint";
 }
 
 export interface AdminAccount {

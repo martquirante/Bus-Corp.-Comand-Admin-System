@@ -52,6 +52,14 @@ export const routesController = {
     res.json(envelope(routes, firebaseService.source()));
   },
 
+  async updateLegacyRoute(req: Request, res: Response) {
+    const direction = routeDirectionSchema.parse(req.params.direction);
+    const key = String(req.params.key);
+    const payload = routeConfigSchema.partial().parse(req.body);
+    const route = await routeService.updateLegacyRoute(direction, key, payload, req.user?.email || "system");
+    res.json(envelope(route, firebaseService.source()));
+  },
+
   async createRoute(req: Request, res: Response) {
     const payload = routeConfigSchema.parse(req.body);
     const route = await routeService.createRoute(payload, req.user?.email || "system");

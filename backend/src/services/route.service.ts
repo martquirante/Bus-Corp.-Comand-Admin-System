@@ -102,6 +102,12 @@ const slugify = (value: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 80);
 
+const normalizeLabel = (value: unknown) =>
+  String(value || "")
+    .replace(/PITIX/gi, "PITX")
+    .replace(/St\.? ?Cruz/gi, "ST. CRUZ")
+    .trim();
+
 const pathFor = (direction: RouteDirection) => routePathByDirection[direction];
 
 const toWaypointArray = (value: unknown) => {
@@ -116,7 +122,7 @@ const toWaypointArray = (value: unknown) => {
       const lng = item.lng ?? item.longitude;
       return {
         id: String(item.id || key),
-        name: item.name || item.stopName || item.label || item.title,
+        name: normalizeLabel(item.name || item.stopName || item.label || item.title),
         lat: lat === undefined || lat === null ? undefined : toNumber(lat),
         lng: lng === undefined || lng === null ? undefined : toNumber(lng),
         sequence: item.sequence ?? item.order ?? item.point_order ?? item.stop_order ?? index + 1
@@ -131,9 +137,10 @@ const normalizeLegacyRoutes = (raw: RawRoutes | null, direction: RouteDirection)
     .map(([key, route]) => ({
       id: `legacy-${direction}-${key}`,
       direction,
-      routeName: route.routeName || `${route.origin || "Unknown"} to ${route.destination || "Unknown"}`,
-      origin: String(route.origin || "Unknown Origin"),
-      destination: String(route.destination || "Unknown Destination"),
+      routeName:
+        normalizeLabel(route.routeName) || `${normalizeLabel(route.origin)} to ${normalizeLabel(route.destination)}`,
+      origin: normalizeLabel(route.origin || "Unknown Origin"),
+      destination: normalizeLabel(route.destination || "Unknown Destination"),
       price: toNumber(route.price ?? route.baseFare),
       distance: route.distance ? toNumber(route.distance) : undefined,
       distanceKm: route.distanceKm ? toNumber(route.distanceKm) : route.distance ? toNumber(route.distance) : undefined,
@@ -143,8 +150,18 @@ const normalizeLegacyRoutes = (raw: RawRoutes | null, direction: RouteDirection)
       isViceVersa: Boolean(route.isViceVersa),
       reverseRouteId: route.reverseRouteId,
       mapReferenceUrl: route.mapReferenceUrl,
-      stops: Array.isArray(route.stops) ? route.stops : [],
-      waypoints: Array.isArray(route.waypoints) ? route.waypoints : [],
+      stops: Array.isArray(route.stops)
+        ? route.stops.map((stop) => ({
+            ...stop,
+            name: normalizeLabel(stop?.name)
+          }))
+        : [],
+      waypoints: Array.isArray(route.waypoints)
+        ? route.waypoints.map((point) => ({
+            ...point,
+            name: normalizeLabel(point?.name)
+          }))
+        : [],
       source: "legacy",
       legacyPath: direction === "forward" ? firebasePaths.routesForward : firebasePaths.routesReverse,
       legacyKey: key,
@@ -159,9 +176,9 @@ const normalizeAdminRoutes = (raw: RawRoutes | null): RouteConfig[] =>
     .map(([key, route]) => ({
       id: String(route.routeId || key),
       direction: route.direction || "forward",
-      routeName: route.routeName || `${route.origin || "Unknown"} to ${route.destination || "Unknown"}`,
-      origin: String(route.origin || "Unknown Origin"),
-      destination: String(route.destination || "Unknown Destination"),
+      routeName: normalizeLabel(route.routeName) || `${normalizeLabel(route.origin)} to ${normalizeLabel(route.destination)}`,
+      origin: normalizeLabel(route.origin || "Unknown Origin"),
+      destination: normalizeLabel(route.destination || "Unknown Destination"),
       price: toNumber(route.price ?? route.baseFare),
       distance: route.distance ? toNumber(route.distance) : undefined,
       distanceKm: route.distanceKm ? toNumber(route.distanceKm) : route.distance ? toNumber(route.distance) : undefined,
@@ -347,6 +364,52 @@ export const routeService = {
 
   async updateRouteStatus(id: string, status: RouteStatus, actor = "system"): Promise<RouteConfig> {
     return this.updateRoute(id, { status }, actor);
+  },
+
+  async updateLegacyRoute(
+    direction: RouteDirection,
+    key: string,
+    patch: Partial<Omit<RouteConfig, "id">>,
+    actor = "system"
+  ): Promise<RouteConfig> {
+    const legacyPath = pathFor(direction);
+    const current = (await realtimeDbService.getPath<Record<string, any>>(`${legacyPath}/${key}`)) || {};
+    const now = new Date().toISOString();
+    const payload = {
+      ...current,
+      ...patch,
+      routeName: patch.routeName || current.routeName || `${patch.origin || current.origin || "Unknown"} to ${patch.destination || current.destination || "Unknown"}`,
+      origin: patch.origin || current.origin,
+      destination: patch.destination || current.destination,
+      price: Math.round(toNumber(patch.price ?? current.price)),
+      baseFare: Math.round(toNumber(patch.baseFare ?? current.baseFare)),
+      stops: patch.stops ?? current.stops,
+      updatedAt: now,
+      updatedBy: actor
+    };
+
+    await realtimeDbService.updatePath(`${legacyPath}/${key}`, payload);
+    await firebaseService.auditAction("route.legacy.update", actor, { direction, key, patch });
+
+    return {
+      id: `legacy-${direction}-${key}`,
+      direction,
+      routeName: normalizeLabel(payload.routeName),
+      origin: normalizeLabel(payload.origin),
+      destination: normalizeLabel(payload.destination),
+      price: toNumber(payload.price),
+      baseFare: toNumber(payload.baseFare),
+      distanceKm: payload.distanceKm ? toNumber(payload.distanceKm) : undefined,
+      estimatedDurationMinutes: payload.estimatedDurationMinutes ? toNumber(payload.estimatedDurationMinutes) : undefined,
+      status: current.status || "active",
+      stops: Array.isArray(payload.stops) ? payload.stops : [],
+      source: "legacy",
+      legacyPath: direction === "forward" ? firebasePaths.routesForward : firebasePaths.routesReverse,
+      legacyKey: key,
+      createdAt: payload.createdAt,
+      updatedAt: payload.updatedAt,
+      createdBy: payload.createdBy
+    };
   },
 
   async addStop(id: string, stop: NonNullable<RouteConfig["stops"]>[number], actor = "system") {

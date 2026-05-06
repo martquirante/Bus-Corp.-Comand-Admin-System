@@ -1477,6 +1477,30 @@ textarea:focus {
   gap: 13px;
 }
 
+.form-readonly-header {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(19, 164, 107, 0.08);
+  border: 1px solid rgba(19, 164, 107, 0.2);
+  border-radius: var(--radius);
+}
+
+.form-readonly-header label {
+  margin: 0;
+}
+
+.locked-input {
+  background: var(--surface-strong);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.locked-input:focus {
+  border-color: var(--line);
+  box-shadow: none;
+}
+
 .form-row,
 .field-with-button,
 .inline-actions {

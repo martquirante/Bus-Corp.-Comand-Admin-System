@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Providers } from "@/contexts/Providers";
 import "@/styles/globals.css";
+import "@/styles/route-command-center.css";
 
 export const metadata: Metadata = {
-  title: "POS Bus Ticketing Command Center",
+  title: "POS Bus Ticketing | Command Center",
   description: "Web admin command center for the POS Bus Ticketing Simulation."
 };
 

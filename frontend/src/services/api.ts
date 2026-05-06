@@ -172,6 +172,13 @@ export const api = {
     return apiFetch<RouteConfig[]>("/routes/legacy/reverse");
   },
 
+  async updateLegacyRoute(direction: RouteConfig["direction"], key: string, payload: Partial<RouteConfig>) {
+    return apiFetch<RouteConfig>(`/routes/legacy/${encodeURIComponent(direction)}/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
   async createRoute(payload: Omit<RouteConfig, "id">) {
     return apiFetch<RouteConfig>("/routes", {
       method: "POST",
