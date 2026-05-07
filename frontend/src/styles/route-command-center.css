@@ -12,6 +12,9 @@
 
 .route-preview-map-shell {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     min-height: 470px;
     overflow: hidden;
     border: 1px solid var(--line);
@@ -41,23 +44,60 @@
     position: relative;
     flex: 1;
     min-height: 470px;
+    cursor: grab;
     z-index: 1;
+}
+
+.route-preview-map-canvas.is-editing {
+    cursor: crosshair;
 }
 
 .route-preview-controls {
     position: relative;
     z-index: 500;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px;
     border-top: 1px solid var(--line);
     color: var(--text);
     background: color-mix(in srgb, var(--surface-strong) 90%, transparent);
     backdrop-filter: blur(14px);
 }
 
+.route-preview-message {
+    min-width: min(100%, 280px);
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.route-preview-message strong {
+    color: var(--text);
+}
+
+.route-preview-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.route-preview-divider {
+    width: 1px;
+    height: 20px;
+    margin: 0 4px;
+    background: var(--line);
+}
+
 .route-preview-controls .soft-button {
     min-height: 32px;
+    padding: 6px 10px;
     border: 1px solid var(--line);
     color: var(--text);
     background: var(--surface-muted);
+    font-size: 0.75rem;
 }
 
 .route-preview-controls .soft-button:hover,
@@ -69,6 +109,224 @@
 .route-preview-controls .soft-button:disabled {
     cursor: not-allowed;
     opacity: 0.45;
+}
+
+.route-preview-controls .primary-action {
+    border: none;
+    color: #fff;
+    background: var(--green);
+    border-radius: 4px;
+}
+
+.route-edit-point-count {
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 850;
+}
+
+.route-clear-confirm,
+.route-fallback-warning {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 8px;
+    color: var(--text);
+    background: rgba(245, 158, 11, 0.13);
+    font-size: 0.75rem;
+    font-weight: 850;
+}
+
+.route-fallback-warning {
+    flex: 1 1 100%;
+}
+
+.route-clear-confirm button {
+    min-height: 24px;
+    padding: 3px 7px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    background: var(--surface-strong);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 850;
+}
+
+.route-edit-search-panel {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 900;
+    width: min(420px, calc(100% - 24px));
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(14px);
+}
+
+.route-edit-search-form {
+    display: flex;
+    gap: 8px;
+}
+
+.route-edit-search-form input {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--text);
+    background: var(--surface);
+}
+
+.route-edit-search-results {
+    display: grid;
+    gap: 6px;
+    max-height: 220px;
+    margin-top: 8px;
+    overflow-y: auto;
+}
+
+.route-edit-search-results button {
+    display: grid;
+    gap: 3px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--text);
+    background: var(--surface);
+    text-align: left;
+    cursor: pointer;
+}
+
+.route-edit-search-results strong {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+}
+
+.route-edit-search-results span,
+.route-edit-search-panel p {
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.route-edit-search-panel p {
+    margin: 8px 2px 0;
+}
+
+.route-waypoint-sidebar {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 890;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(360px, calc(100% - 24px));
+    max-height: min(430px, calc(100% - 116px));
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(14px);
+}
+
+.route-waypoint-sidebar header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.route-waypoint-sidebar header span,
+.route-waypoint-sidebar p {
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.route-waypoint-sidebar ol {
+    display: grid;
+    gap: 6px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.route-waypoint-sidebar li {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    cursor: grab;
+}
+
+.route-waypoint-sidebar li.selected {
+    border-color: color-mix(in srgb, var(--blue) 65%, var(--line));
+    background: color-mix(in srgb, var(--blue) 10%, var(--surface));
+}
+
+.waypoint-sequence {
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #dc3d35;
+    border-radius: 999px;
+    color: #111;
+    background: #fff;
+    font-size: 0.7rem;
+    font-weight: 900;
+}
+
+.waypoint-sequence.origin {
+    border-color: #0f8a55;
+    color: #fff;
+    background: #13a46b;
+}
+
+.waypoint-sequence.destination {
+    border-color: #b92822;
+    color: #fff;
+    background: #dc3d35;
+}
+
+.waypoint-label {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 0.76rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.waypoint-remove-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 26px;
+    padding: 4px 7px;
+    border: 1px solid rgba(220, 61, 53, 0.25);
+    border-radius: 7px;
+    color: var(--red);
+    background: rgba(220, 61, 53, 0.08);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 850;
 }
 
 .route-preview-status {
@@ -126,6 +384,97 @@
 
 .edit-marker.selected {
     z-index: 900 !important;
+}
+
+.edit-marker-label {
+    display: grid;
+    place-items: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 7px;
+    border: 2px solid #dc3d35;
+    border-radius: 999px;
+    color: #111;
+    background: #fff;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.24);
+    font-size: 0.64rem;
+    font-weight: 900;
+}
+
+.edit-marker.origin .edit-marker-label {
+    border-color: #0f8a55;
+    color: #fff;
+    background: #13a46b;
+}
+
+.edit-marker.destination .edit-marker-label {
+    border-color: #b92822;
+    color: #fff;
+    background: #dc3d35;
+}
+
+.edit-marker.selected .edit-marker-label {
+    outline: 3px solid #ffeb3b;
+    outline-offset: 2px;
+}
+
+.search-preview-marker {
+    display: grid;
+    place-items: center;
+}
+
+.search-preview-dot {
+    width: 24px;
+    height: 24px;
+    border: 3px solid #fff;
+    border-radius: 999px;
+    background: var(--blue);
+    box-shadow: 0 0 0 0 rgba(15, 122, 211, 0.45), 0 10px 24px rgba(0, 0, 0, 0.28);
+    animation: route-preview-pulse 1.2s ease-out infinite;
+}
+
+.search-preview-popup {
+    display: grid;
+    gap: 8px;
+    min-width: 190px;
+}
+
+.search-preview-popup strong {
+    color: #101828;
+    font-size: 0.82rem;
+}
+
+.search-preview-popup div {
+    display: flex;
+    gap: 6px;
+}
+
+.search-preview-popup button {
+    min-height: 28px;
+    padding: 5px 8px;
+    border: 1px solid #d0d5dd;
+    border-radius: 7px;
+    color: #101828;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.76rem;
+    font-weight: 850;
+}
+
+.search-preview-popup button:first-child {
+    border-color: #13a46b;
+    color: #fff;
+    background: #13a46b;
+}
+
+@keyframes route-preview-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(15, 122, 211, 0.45), 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
+
+    100% {
+        box-shadow: 0 0 0 18px rgba(15, 122, 211, 0), 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
 }
 
 .leaflet-container {
@@ -510,8 +859,25 @@ input[readonly].locked-input {
         width: 100%;
     }
 
+    .route-preview-action-row {
+        width: 100%;
+    }
+
     .route-preview-controls button {
         flex: 1 1 auto;
+    }
+
+    .route-edit-search-panel,
+    .route-waypoint-sidebar {
+        left: 10px;
+        right: 10px;
+        width: auto;
+    }
+
+    .route-waypoint-sidebar {
+        top: auto;
+        bottom: 76px;
+        max-height: 210px;
     }
 
     .selected-route-summary dl {

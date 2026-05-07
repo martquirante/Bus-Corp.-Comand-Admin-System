@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouteConfig } from "@pos-bus/shared";
 import {
+  GripVertical,
   LocateFixed,
   Map,
   Maximize2,
@@ -11,13 +12,88 @@ import {
   Satellite,
   Search,
   TrafficCone,
-  Trash2
+  Trash2,
+  Undo2,
+  X
 } from "lucide-react";
 import { getRouteDisplayName, normalizeRouteLabel } from "@/utils/routeLines";
 
-type LeafletApi = any;
-type LeafletMap = any;
-type LeafletLayer = any;
+type LeafletLatLng = {
+  lat: number;
+  lng: number;
+};
+
+type LeafletMapMouseEvent = {
+  latlng: LeafletLatLng;
+};
+
+type LeafletMarkerEvent = {
+  target: {
+    getLatLng: () => LeafletLatLng;
+  };
+};
+
+type LeafletPopupEvent = {
+  popup?: {
+    getElement?: () => HTMLElement | null;
+  };
+};
+
+type LeafletLayerTarget = LeafletMap | LeafletLayer;
+
+type LeafletLayer = {
+  addTo: (target: LeafletLayerTarget) => LeafletLayer;
+  bindPopup: (content: string, options?: Record<string, unknown>) => LeafletLayer;
+};
+
+type LeafletMarker = LeafletLayer & {
+  addTo: (target: LeafletLayerTarget) => LeafletMarker;
+  bindPopup: (content: string, options?: Record<string, unknown>) => LeafletMarker;
+  openPopup: () => LeafletMarker;
+  on: (event: string, handler: (event: LeafletMarkerEvent & LeafletPopupEvent) => void) => LeafletMarker;
+};
+
+type LeafletMap = {
+  setView: (center: LatLngPoint, zoom: number) => LeafletMap;
+  flyTo: (center: LatLngPoint, zoom: number, options?: Record<string, unknown>) => LeafletMap;
+  fitBounds: (
+    points: LatLngPoint[],
+    options?: { padding?: [number, number]; maxZoom?: number }
+  ) => LeafletMap;
+  invalidateSize: (options?: { animate?: boolean }) => void;
+  distance?: (from: LatLngPoint, to: LatLngPoint) => number;
+  getZoom?: () => number;
+  hasLayer: (layer: LeafletLayer) => boolean;
+  removeLayer: (layer: LeafletLayer) => void;
+  on: (event: string, handler: (event: LeafletMapMouseEvent) => void) => void;
+  off: (event: string, handler: (event: LeafletMapMouseEvent) => void) => void;
+};
+
+type LeafletApi = {
+  map: (
+    element: HTMLElement,
+    options?: { zoomControl?: boolean; preferCanvas?: boolean }
+  ) => LeafletMap;
+  control: {
+    zoom: (options?: { position?: string }) => { addTo: (map: LeafletMap) => void };
+  };
+  tileLayer: (url: string, options?: Record<string, unknown>) => LeafletLayer;
+  layerGroup: () => LeafletLayer;
+  polyline: (points: LatLngPoint[], options?: Record<string, unknown>) => LeafletLayer;
+  marker: (
+    point: LatLngPoint,
+    options?: { draggable?: boolean; icon?: unknown }
+  ) => LeafletMarker;
+  divIcon: (options?: Record<string, unknown>) => unknown;
+  DomEvent: {
+    stopPropagation: (event: unknown) => void;
+  };
+};
+
+type LeafletWindow = Window & {
+  L?: LeafletApi;
+  __posBusLeafletLoad?: Promise<LeafletApi>;
+};
 
 type LatLngPoint = [number, number];
 
@@ -35,12 +111,25 @@ type SearchResult = {
   class?: string;
 };
 
-declare global {
-  interface Window {
-    L?: LeafletApi;
-    __posBusLeafletLoad?: Promise<LeafletApi>;
-  }
-}
+type RoadGeometryResult = {
+  points: LatLngPoint[];
+  distanceKm?: number;
+  estimatedDurationMinutes?: number;
+  warning?: string;
+  isStraightLineFallback?: boolean;
+};
+
+type PendingSearchPoint = {
+  point: LatLngPoint;
+  label: string;
+};
+
+type StraightLineSaveState = {
+  routeId: string;
+  points: LatLngPoint[];
+  distanceKm?: number;
+  estimatedDurationMinutes?: number;
+};
 
 const LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
@@ -54,10 +143,11 @@ const ensureLeaflet = () => {
     return Promise.reject(new Error("Map is not available while the page is loading."));
   }
 
-  if (window.L) return Promise.resolve(window.L);
-  if (window.__posBusLeafletLoad) return window.__posBusLeafletLoad;
+  const leafletWindow = window as LeafletWindow;
+  if (leafletWindow.L) return Promise.resolve(leafletWindow.L);
+  if (leafletWindow.__posBusLeafletLoad) return leafletWindow.__posBusLeafletLoad;
 
-  window.__posBusLeafletLoad = new Promise((resolve, reject) => {
+  leafletWindow.__posBusLeafletLoad = new Promise<LeafletApi>((resolve, reject) => {
     if (!document.querySelector(`link[href="${LEAFLET_CSS}"]`)) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
@@ -69,13 +159,13 @@ const ensureLeaflet = () => {
     script.src = LEAFLET_JS;
     script.async = true;
     script.onload = () =>
-      window.L ? resolve(window.L) : reject(new Error("Map library did not start."));
+      leafletWindow.L ? resolve(leafletWindow.L) : reject(new Error("Map library did not start."));
     script.onerror = () =>
       reject(new Error("The map service is unavailable right now. Try again later."));
     document.head.appendChild(script);
   });
 
-  return window.__posBusLeafletLoad;
+  return leafletWindow.__posBusLeafletLoad;
 };
 
 const hasCoordinate = (point: { lat?: number; lng?: number }) =>
@@ -158,7 +248,7 @@ const estimateTrafficDurationMinutes = (distanceKm?: number) => {
   return Math.max(1, Math.round(baseMinutes * trafficBuffer));
 };
 
-async function fetchFromOsrm(points: LatLngPoint[]) {
+async function fetchFromOsrm(points: LatLngPoint[]): Promise<RoadGeometryResult> {
   const coords = points.map(([lat, lng]) => `${lng},${lat}`).join(";");
   const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
 
@@ -177,16 +267,24 @@ async function fetchFromOsrm(points: LatLngPoint[]) {
     typeof route.duration === "number" ? Math.round(route.duration / 60) : undefined;
 
   const trafficAdjustedMinutes = baseMinutes ? Math.round(baseMinutes * 1.35) : undefined;
+  const routeDistanceKm =
+    typeof route.distance === "number" ? Number((route.distance / 1000).toFixed(1)) : undefined;
+  const straightLineKm = Number(
+    (haversineMeters(points[0], points[points.length - 1]) / 1000).toFixed(1)
+  );
+
+  if (routeDistanceKm && straightLineKm && routeDistanceKm > straightLineKm * 2) {
+    throw new Error("Road route service returned an unlikely route line.");
+  }
 
   return {
     points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as LatLngPoint),
-    distanceKm:
-      typeof route.distance === "number" ? Number((route.distance / 1000).toFixed(1)) : undefined,
+    distanceKm: routeDistanceKm,
     estimatedDurationMinutes: trafficAdjustedMinutes
   };
 }
 
-async function fetchFromOpenRouteService(points: LatLngPoint[]) {
+async function fetchFromOpenRouteService(points: LatLngPoint[]): Promise<RoadGeometryResult> {
   if (!OPENROUTESERVICE_KEY) {
     throw new Error("OpenRouteService API key is not configured.");
   }
@@ -222,7 +320,19 @@ async function fetchFromOpenRouteService(points: LatLngPoint[]) {
   };
 }
 
-async function fetchRoadGeometry(points: LatLngPoint[]) {
+const straightLineFallback = (points: LatLngPoint[]): RoadGeometryResult => {
+  const distanceKm = calculateLineDistanceKm(points);
+
+  return {
+    points,
+    distanceKm,
+    estimatedDurationMinutes: estimateTrafficDurationMinutes(distanceKm),
+    warning: "Road path service unavailable — showing straight-line preview. Save anyway?",
+    isStraightLineFallback: true
+  };
+};
+
+async function fetchRoadGeometry(points: LatLngPoint[]): Promise<RoadGeometryResult> {
   if (points.length < 2) {
     return {
       points,
@@ -235,10 +345,14 @@ async function fetchRoadGeometry(points: LatLngPoint[]) {
     return await fetchFromOsrm(points);
   } catch {
     if (OPENROUTESERVICE_KEY) {
-      return fetchFromOpenRouteService(points);
+      try {
+        return await fetchFromOpenRouteService(points);
+      } catch {
+        return straightLineFallback(points);
+      }
     }
 
-    throw new Error("Road route service is unavailable right now. Your saved route was not changed.");
+    return straightLineFallback(points);
   }
 }
 
@@ -256,6 +370,44 @@ const shortPlaceName = (value: string) => {
   const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
   return parts.slice(0, 3).join(", ");
 };
+
+const formatPointLabel = ([lat, lng]: LatLngPoint) =>
+  `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const getMarkerRole = (index: number, total: number) => {
+  if (index === 0) return "origin";
+  if (index === total - 1) return "destination";
+  return "waypoint";
+};
+
+async function reverseGeocodePoint(point: LatLngPoint) {
+  const params = new URLSearchParams({
+    format: "json",
+    lat: String(point[0]),
+    lon: String(point[1]),
+    zoom: "18",
+    addressdetails: "0"
+  });
+
+  const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) return "";
+
+  const result = (await response.json()) as { display_name?: string };
+  return result.display_name ? shortPlaceName(result.display_name) : "";
+}
 
 export function RoutePreviewMap({
   routes,
@@ -304,11 +456,17 @@ export function RoutePreviewMap({
 
   const [isEditing, setIsEditing] = useState(false);
   const [editPoints, setEditPoints] = useState<LatLngPoint[]>([]);
+  const [editPointLabels, setEditPointLabels] = useState<string[]>([]);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [draggedPointIndex, setDraggedPointIndex] = useState<number | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [pendingSearchPoint, setPendingSearchPoint] = useState<PendingSearchPoint | null>(null);
+  const [straightLineSave, setStraightLineSave] = useState<StraightLineSaveState | null>(null);
+  const [fallbackWarning, setFallbackWarning] = useState<string | null>(null);
 
   useEffect(() => {
     metricsCallbackRef.current = onRouteMetrics;
@@ -340,6 +498,119 @@ export function RoutePreviewMap({
     return visibleRoutes[0];
   }, [selectedRouteId, visibleRoutes]);
 
+  const updatePointLabelFromGeocode = useCallback((index: number, point: LatLngPoint) => {
+    void reverseGeocodePoint(point)
+      .then((label) => {
+        if (!label) return;
+
+        setEditPointLabels((previous) => {
+          if (!previous[index]) return previous;
+
+          const next = [...previous];
+          next[index] = label;
+          return next;
+        });
+      })
+      .catch(() => undefined);
+  }, [setEditPointLabels]);
+
+  const addEditPoint = useCallback((point: LatLngPoint, label?: string) => {
+    const nextIndex = editPoints.length;
+    const pointLabel = label || formatPointLabel(point);
+
+    setEditPoints((previous) => [...previous, point]);
+    setEditPointLabels((previous) => [...previous, pointLabel]);
+    setSelectedPointIndex(nextIndex);
+    setShowClearConfirm(false);
+    setStraightLineSave(null);
+    setFallbackWarning(null);
+
+    if (!label) {
+      updatePointLabelFromGeocode(nextIndex, point);
+    }
+  }, [
+    editPoints.length,
+    setEditPoints,
+    setEditPointLabels,
+    setSelectedPointIndex,
+    setShowClearConfirm,
+    setStraightLineSave,
+    setFallbackWarning,
+    updatePointLabelFromGeocode
+  ]);
+
+  const updateEditPoint = useCallback((index: number, point: LatLngPoint) => {
+    setEditPoints((previous) => {
+      const next = [...previous];
+      next[index] = point;
+      return next;
+    });
+    setEditPointLabels((previous) => {
+      const next = [...previous];
+      next[index] = formatPointLabel(point);
+      return next;
+    });
+    setStraightLineSave(null);
+    setFallbackWarning(null);
+    updatePointLabelFromGeocode(index, point);
+  }, [
+    setEditPoints,
+    setEditPointLabels,
+    setStraightLineSave,
+    setFallbackWarning,
+    updatePointLabelFromGeocode
+  ]);
+
+  const removePointAtIndex = useCallback((index: number) => {
+    setEditPoints((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
+    setEditPointLabels((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
+    setSelectedPointIndex(null);
+    setShowClearConfirm(false);
+    setStraightLineSave(null);
+    setFallbackWarning(null);
+  }, [
+    setEditPoints,
+    setEditPointLabels,
+    setSelectedPointIndex,
+    setShowClearConfirm,
+    setStraightLineSave,
+    setFallbackWarning
+  ]);
+
+  const reorderPoint = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+
+    setEditPoints((previous) => {
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setEditPointLabels((previous) => {
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setSelectedPointIndex(toIndex);
+    setDraggedPointIndex(null);
+    setStraightLineSave(null);
+    setFallbackWarning(null);
+  }, [
+    setEditPoints,
+    setEditPointLabels,
+    setSelectedPointIndex,
+    setDraggedPointIndex,
+    setStraightLineSave,
+    setFallbackWarning
+  ]);
+
+  const undoLastPoint = useCallback(() => {
+    if (!editPoints.length) return;
+    removePointAtIndex(editPoints.length - 1);
+    setMessage("Last route point removed.");
+  }, [editPoints.length, removePointAtIndex, setMessage]);
+
   const recalculatePath = async () => {
     const entry = selectedRouteEntry;
 
@@ -356,6 +627,8 @@ export function RoutePreviewMap({
     }
 
     setIsCalculating(true);
+    setStraightLineSave(null);
+    setFallbackWarning(null);
     setMessage("Calculating road path preview...");
 
     try {
@@ -364,9 +637,13 @@ export function RoutePreviewMap({
         result.distanceKm ?? calculateLineDistanceKm(result.points, mapRef.current);
       const estimatedDurationMinutes =
         result.estimatedDurationMinutes ?? estimateTrafficDurationMinutes(distanceKm);
+      const warning = result.warning || null;
+
+      setFallbackWarning(warning);
 
       if (isEditing) {
         setEditPoints(result.points);
+        setEditPointLabels(result.points.map(formatPointLabel));
         setComputedMetricBaseSignatures((current) => ({
           ...current,
           [entry.route.id]: getPointSignature(result.points)
@@ -378,7 +655,17 @@ export function RoutePreviewMap({
             estimatedDurationMinutes
           }
         }));
-        setMessage("Road path preview is ready. Review it, then click Save route path.");
+        if (result.isStraightLineFallback) {
+          setStraightLineSave({
+            routeId: entry.route.id,
+            points: result.points,
+            distanceKm,
+            estimatedDurationMinutes
+          });
+          setMessage(result.warning || "Road path service unavailable. Review before saving.");
+        } else {
+          setMessage("Road path preview is ready. Review it, then click Save route path.");
+        }
       } else {
         setComputedRoads((current) => ({
           ...current,
@@ -403,7 +690,10 @@ export function RoutePreviewMap({
           distanceKm,
           estimatedDurationMinutes
         });
-        setMessage("Road path preview is ready. It will not replace saved waypoints until you save it.");
+        setMessage(
+          result.warning ||
+            "Road path preview is ready. It will not replace saved waypoints until you save it."
+        );
       }
     } catch (error) {
       setMessage(
@@ -463,7 +753,7 @@ export function RoutePreviewMap({
     }
   };
 
-  const addSearchResultAsPoint = (result: SearchResult) => {
+  const previewSearchResult = (result: SearchResult) => {
     const lat = Number(result.lat);
     const lng = Number(result.lon);
 
@@ -473,22 +763,34 @@ export function RoutePreviewMap({
     }
 
     const point: LatLngPoint = [lat, lng];
+    const label = shortPlaceName(result.display_name);
 
-    setEditPoints((previous) => {
-      const next = [...previous, point];
-      setSelectedPointIndex(next.length - 1);
-      return next;
-    });
+    setPendingSearchPoint({ point, label });
+    setStraightLineSave(null);
+    setFallbackWarning(null);
 
     const map = mapRef.current;
     if (map) {
-      map.setView(point, Math.max(map.getZoom?.() || 13, 14));
+      map.flyTo(point, 15);
     }
 
-    setMessage(`${shortPlaceName(result.display_name)} added as a route point.`);
+    setMessage(`${label} selected. Confirm Add as waypoint on the map.`);
     setSearchResults([]);
     setSearchQuery("");
   };
+
+  const confirmPendingSearchPoint = useCallback(() => {
+    if (!pendingSearchPoint) return;
+
+    addEditPoint(pendingSearchPoint.point, pendingSearchPoint.label);
+    setMessage(`${pendingSearchPoint.label} added as a route waypoint.`);
+    setPendingSearchPoint(null);
+  }, [addEditPoint, pendingSearchPoint, setMessage, setPendingSearchPoint]);
+
+  const cancelPendingSearchPoint = useCallback(() => {
+    setPendingSearchPoint(null);
+    setMessage("Search preview cancelled.");
+  }, [setMessage, setPendingSearchPoint]);
 
   useEffect(() => {
     let cancelled = false;
@@ -537,16 +839,12 @@ export function RoutePreviewMap({
     const map = mapRef.current;
     if (!map) return;
 
-    const handleClick = (event: any) => {
+    const handleClick = (event: LeafletMapMouseEvent) => {
       if (!isEditing) return;
 
       const { lat, lng } = event.latlng;
 
-      setEditPoints((previous) => {
-        const next = [...previous, [lat, lng]] as LatLngPoint[];
-        setSelectedPointIndex(next.length - 1);
-        return next;
-      });
+      addEditPoint([lat, lng]);
     };
 
     map.on("click", handleClick);
@@ -554,7 +852,7 @@ export function RoutePreviewMap({
     return () => {
       map.off("click", handleClick);
     };
-  }, [isEditing]);
+  }, [addEditPoint, isEditing]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -572,6 +870,20 @@ export function RoutePreviewMap({
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, []);
+
+  useEffect(() => {
+    if (!isEditing) return;
+
+    const handleUndoShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undoLastPoint();
+      }
+    };
+
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [isEditing, editPoints.length, undoLastPoint]);
 
   const toggleViewMode = (mode: "street" | "satellite") => {
     const map = mapRef.current;
@@ -614,7 +926,7 @@ export function RoutePreviewMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const L = window.L;
+    const L = (window as LeafletWindow).L;
     if (!map || !L) return;
 
     let cancelled = false;
@@ -643,36 +955,61 @@ export function RoutePreviewMap({
         }).addTo(editGroup);
       }
 
+      if (pendingSearchPoint) {
+        const previewMarker = L.marker(pendingSearchPoint.point, {
+          icon: L.divIcon({
+            className: "search-preview-marker",
+            html: `<div class="search-preview-dot"></div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17]
+          })
+        })
+          .addTo(editGroup)
+          .bindPopup(
+            `<div class="search-preview-popup"><strong>${escapeHtml(pendingSearchPoint.label)}</strong><div><button type="button" data-route-preview-action="add">Add as waypoint</button><button type="button" data-route-preview-action="cancel">Cancel</button></div></div>`,
+            { closeButton: false, autoClose: false, closeOnClick: false }
+          );
+
+        previewMarker.on("popupopen", (event: LeafletPopupEvent) => {
+          const element = event.popup?.getElement?.();
+          const addButton = element?.querySelector('[data-route-preview-action="add"]');
+          const cancelButton = element?.querySelector('[data-route-preview-action="cancel"]');
+
+          if (addButton instanceof HTMLButtonElement) {
+            addButton.addEventListener("click", confirmPendingSearchPoint);
+          }
+          if (cancelButton instanceof HTMLButtonElement) {
+            cancelButton.addEventListener("click", cancelPendingSearchPoint);
+          }
+        });
+
+        previewMarker.openPopup();
+      }
+
       editPoints.forEach((point, index) => {
         const isSelected = index === selectedPointIndex;
-        const label =
-          index === 0 ? "Start" : index === editPoints.length - 1 ? "End" : `${index + 1}`;
+        const role = getMarkerRole(index, editPoints.length);
+        const label = index === 0 ? "Start" : index === editPoints.length - 1 ? "End" : `${index + 1}`;
 
         const marker = L.marker(point, {
           draggable: true,
           icon: L.divIcon({
-            className: `edit-marker ${isSelected ? "selected" : ""}`,
-            html: `<div style="display:grid;place-items:center;min-width:28px;height:28px;padding:0 7px;background:${
-              isSelected ? "#ffeb3b" : "#fff"
-            };border:2px solid #dc3d35;border-radius:999px;color:#111;font-size:10px;font-weight:900;box-shadow:0 6px 14px rgba(0,0,0,.24);">${label}</div>`,
+            className: `edit-marker ${role} ${isSelected ? "selected" : ""}`,
+            html: `<div class="edit-marker-label">${label}</div>`,
             iconSize: [38, 32],
             iconAnchor: [19, 16]
           })
         }).addTo(editGroup);
 
-        marker.on("click", (event: any) => {
+        marker.on("click", (event: unknown) => {
           L.DomEvent.stopPropagation(event);
           setSelectedPointIndex(index);
         });
 
-        marker.on("dragend", (event: any) => {
+        marker.on("dragend", (event: LeafletMarkerEvent) => {
           const nextPosition = event.target.getLatLng();
 
-          setEditPoints((previous) => {
-            const next = [...previous];
-            next[index] = [nextPosition.lat, nextPosition.lng];
-            return next;
-          });
+          updateEditPoint(index, [nextPosition.lat, nextPosition.lng]);
         });
       });
 
@@ -801,15 +1138,24 @@ export function RoutePreviewMap({
     computedMetricBaseSignatures,
     isEditing,
     editPoints,
-    selectedPointIndex
+    confirmPendingSearchPoint,
+    cancelPendingSearchPoint,
+    pendingSearchPoint,
+    selectedPointIndex,
+    updateEditPoint
   ]);
 
   const toggleEditMode = () => {
     if (isEditing) {
       setIsEditing(false);
       setEditPoints([]);
+      setEditPointLabels([]);
       setSelectedPointIndex(null);
       setSearchResults([]);
+      setPendingSearchPoint(null);
+      setShowClearConfirm(false);
+      setStraightLineSave(null);
+      setFallbackWarning(null);
       setMessage("Manual route editing cancelled.");
       return;
     }
@@ -826,7 +1172,12 @@ export function RoutePreviewMap({
     }
 
     setEditPoints(initialPoints);
+    setEditPointLabels(initialPoints.map(formatPointLabel));
     setSelectedPointIndex(null);
+    setPendingSearchPoint(null);
+    setShowClearConfirm(false);
+    setStraightLineSave(null);
+    setFallbackWarning(null);
     setIsEditing(true);
     setMessage("Manual edit mode: click the map or search a place to add route points.");
   };
@@ -834,8 +1185,7 @@ export function RoutePreviewMap({
   const removeSelectedPoint = () => {
     if (selectedPointIndex === null) return;
 
-    setEditPoints((previous) => previous.filter((_, index) => index !== selectedPointIndex));
-    setSelectedPointIndex(null);
+    removePointAtIndex(selectedPointIndex);
   };
 
   const saveEditedPath = async () => {
@@ -856,25 +1206,38 @@ export function RoutePreviewMap({
       return;
     }
 
-    const distanceKm = calculateLineDistanceKm(editPoints, mapRef.current);
-    const editSignature = getPointSignature(editPoints);
-    const previewMetrics =
-      computedMetricBaseSignatures[targetRouteId] === editSignature
-        ? computedMetrics[targetRouteId]
-        : undefined;
-    const estimatedDurationMinutes =
-      previewMetrics?.estimatedDurationMinutes ||
-      estimateTrafficDurationMinutes(distanceKm);
-
     setIsSaving(true);
-    setMessage("Saving route path...");
+    setStraightLineSave(null);
+    setFallbackWarning(null);
+    setMessage("Snapping to road...");
 
     try {
-      await onSaveWaypoints(targetRouteId, editPoints, distanceKm, estimatedDurationMinutes);
+      const result = await fetchRoadGeometry(editPoints);
+      const distanceKm =
+        result.distanceKm ?? calculateLineDistanceKm(result.points, mapRef.current);
+      const estimatedDurationMinutes =
+        result.estimatedDurationMinutes ?? estimateTrafficDurationMinutes(distanceKm);
+
+      setEditPoints(result.points);
+      setEditPointLabels(result.points.map(formatPointLabel));
+
+      if (result.isStraightLineFallback) {
+        setStraightLineSave({
+          routeId: targetRouteId,
+          points: result.points,
+          distanceKm,
+          estimatedDurationMinutes
+        });
+        setFallbackWarning(result.warning || "Road path service unavailable. Save anyway?");
+        setMessage(result.warning || "Road path service unavailable. Save anyway?");
+        return;
+      }
+
+      await onSaveWaypoints(targetRouteId, result.points, distanceKm, estimatedDurationMinutes);
 
       setComputedRoads((current) => ({
         ...current,
-        [targetRouteId]: editPoints
+        [targetRouteId]: result.points
       }));
       setComputedRoadBaseSignatures((current) => ({
         ...current,
@@ -896,7 +1259,42 @@ export function RoutePreviewMap({
       setIsEditing(false);
       setSelectedPointIndex(null);
       setSearchResults([]);
+      setPendingSearchPoint(null);
+      setShowClearConfirm(false);
       setMessage("Route path saved. Live Fleet Map will use this route.");
+    } catch {
+      setMessage("Could not save route path. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const saveStraightLineFallback = async () => {
+    if (!onSaveWaypoints || !straightLineSave) return;
+
+    setIsSaving(true);
+    setMessage("Saving straight-line route path...");
+
+    try {
+      await onSaveWaypoints(
+        straightLineSave.routeId,
+        straightLineSave.points,
+        straightLineSave.distanceKm,
+        straightLineSave.estimatedDurationMinutes
+      );
+
+      setComputedRoads((current) => ({
+        ...current,
+        [straightLineSave.routeId]: straightLineSave.points
+      }));
+      setStraightLineSave(null);
+      setFallbackWarning(null);
+      setIsEditing(false);
+      setSelectedPointIndex(null);
+      setSearchResults([]);
+      setPendingSearchPoint(null);
+      setShowClearConfirm(false);
+      setMessage("Straight-line route path saved. Review it again when road snapping is available.");
     } catch {
       setMessage("Could not save route path. Please try again.");
     } finally {
@@ -909,60 +1307,25 @@ export function RoutePreviewMap({
     : "No route selected";
 
   return (
-    <div
-      className={`route-preview-map-shell ${isFullscreen ? "is-fullscreen" : ""}`}
-      style={{
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        height: isFullscreen ? "100vh" : "100%"
-      }}
-    >
+    <div className={`route-preview-map-shell ${isFullscreen ? "is-fullscreen" : ""}`}>
       <div
         ref={containerRef}
-        className="route-preview-map-canvas"
-        style={{
-          flex: 1,
-          cursor: isEditing ? "crosshair" : "grab"
-        }}
+        className={`route-preview-map-canvas ${isEditing ? "is-editing" : ""}`}
       />
 
       {isEditing ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 12,
-            left: 12,
-            zIndex: 900,
-            width: "min(420px, calc(100% - 24px))",
-            background: "color-mix(in srgb, var(--surface-strong) 94%, transparent)",
-            border: "1px solid var(--line)",
-            borderRadius: 14,
-            boxShadow: "0 18px 36px rgba(0,0,0,.28)",
-            padding: 10
-          }}
-        >
-          <form onSubmit={searchPlaces} style={{ display: "flex", gap: 8 }}>
+        <div className="route-edit-search-panel">
+          <form onSubmit={searchPlaces} className="route-edit-search-form">
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search stop/place, e.g. SM City Fairview"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                border: "1px solid var(--line)",
-                borderRadius: 10,
-                padding: "9px 10px",
-                background: "var(--surface)",
-                color: "var(--text)"
-              }}
             />
 
             <button
               type="submit"
               className="soft-button"
               disabled={isSearching}
-              style={{ padding: "8px 10px", fontSize: 12 }}
             >
               <Search size={14} />
               {isSearching ? "Searching..." : "Search"}
@@ -970,35 +1333,18 @@ export function RoutePreviewMap({
           </form>
 
           {searchResults.length ? (
-            <div
-              style={{
-                marginTop: 8,
-                display: "grid",
-                gap: 6,
-                maxHeight: 220,
-                overflowY: "auto"
-              }}
-            >
+            <div className="route-edit-search-results">
               {searchResults.map((result) => (
                 <button
                   key={result.place_id}
                   type="button"
-                  onClick={() => addSearchResultAsPoint(result)}
-                  style={{
-                    textAlign: "left",
-                    border: "1px solid var(--line)",
-                    borderRadius: 10,
-                    padding: "8px 10px",
-                    background: "var(--surface)",
-                    color: "var(--text)",
-                    cursor: "pointer"
-                  }}
+                  onClick={() => previewSearchResult(result)}
                 >
-                  <strong style={{ display: "block", fontSize: 12 }}>
-                    <Plus size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                  <strong>
+                    <Plus size={12} />
                     Add as route point
                   </strong>
-                  <span style={{ display: "block", color: "var(--muted)", fontSize: 12 }}>
+                  <span>
                     {shortPlaceName(result.display_name)}
                   </span>
                 </button>
@@ -1006,35 +1352,98 @@ export function RoutePreviewMap({
             </div>
           ) : null}
 
-          <p style={{ margin: "8px 2px 0", color: "var(--muted)", fontSize: 12 }}>
+          <p>
             Search is optional. You can still click the map or drag points manually.
           </p>
         </div>
       ) : null}
 
-      <div
-        className="route-preview-controls"
-        style={{
-          padding: "12px",
-          display: "flex",
-          gap: "8px",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          background: "color-mix(in srgb, var(--surface-strong) 86%, transparent)",
-          borderTop: "1px solid var(--line)"
-        }}
-      >
-        <span style={{ fontSize: "13px", color: "var(--muted)" }}>
-          <strong style={{ color: "var(--text)" }}>{activeRouteName}</strong>
+      {isEditing ? (
+        <aside className="route-waypoint-sidebar" aria-label="Manual route waypoint list">
+          <header>
+            <strong>Waypoints</strong>
+            <span>{editPoints.length} points</span>
+          </header>
+
+          {editPoints.length ? (
+            <ol>
+              {editPoints.map((point, index) => (
+                <li
+                  key={`${index}-${point[0].toFixed(5)}-${point[1].toFixed(5)}`}
+                  className={index === selectedPointIndex ? "selected" : ""}
+                  draggable
+                  onClick={() => setSelectedPointIndex(index)}
+                  onDragStart={() => setDraggedPointIndex(index)}
+                  onDragEnd={() => setDraggedPointIndex(null)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    if (draggedPointIndex !== null) reorderPoint(draggedPointIndex, index);
+                  }}
+                >
+                  <GripVertical size={14} aria-hidden="true" />
+                  <span className={`waypoint-sequence ${getMarkerRole(index, editPoints.length)}`}>
+                    {index + 1}
+                  </span>
+                  <span className="waypoint-label">
+                    {editPointLabels[index] || formatPointLabel(point)}
+                  </span>
+                  <button
+                    type="button"
+                    className="waypoint-remove-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removePointAtIndex(index);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p>No route points yet.</p>
+          )}
+        </aside>
+      ) : null}
+
+      <div className="route-preview-controls">
+        <span className="route-preview-message">
+          <strong>{activeRouteName}</strong>
           {" - "}
           {message}
         </span>
 
-        <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+        {fallbackWarning ? (
+          <div className="route-fallback-warning" role="alert">
+            <span>{fallbackWarning}</span>
+            {straightLineSave ? (
+              <>
+                <button type="button" className="soft-button" onClick={saveStraightLineFallback} disabled={isSaving}>
+                  Save straight-line
+                </button>
+                <button
+                  type="button"
+                  className="soft-button"
+                  onClick={() => {
+                    setStraightLineSave(null);
+                    setFallbackWarning(null);
+                    setMessage("Straight-line save cancelled.");
+                  }}
+                  disabled={isSaving}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="route-preview-action-row">
           {isEditing ? (
             <>
-              <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              <span className="route-edit-point-count">
                 {editPoints.length} points
               </span>
 
@@ -1043,11 +1452,6 @@ export function RoutePreviewMap({
                 className="soft-button"
                 onClick={removeSelectedPoint}
                 disabled={selectedPointIndex === null}
-                style={{
-                  padding: "6px 10px",
-                  fontSize: "12px",
-                  opacity: selectedPointIndex === null ? 0.5 : 1
-                }}
               >
                 <Trash2 size={14} />
                 Delete point
@@ -1056,15 +1460,45 @@ export function RoutePreviewMap({
               <button
                 type="button"
                 className="soft-button"
-                onClick={() => {
-                  setEditPoints([]);
-                  setSelectedPointIndex(null);
-                  setSearchResults([]);
-                  setMessage("Unsaved route points cleared.");
-                }}
-                style={{ padding: "6px 10px", fontSize: "12px" }}
+                onClick={() => setShowClearConfirm(true)}
+                disabled={!editPoints.length}
               >
                 Clear route
+              </button>
+
+              {showClearConfirm ? (
+                <span className="route-clear-confirm">
+                  Clear all {editPoints.length} points?
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditPoints([]);
+                      setEditPointLabels([]);
+                      setSelectedPointIndex(null);
+                      setSearchResults([]);
+                      setPendingSearchPoint(null);
+                      setShowClearConfirm(false);
+                      setStraightLineSave(null);
+                      setFallbackWarning(null);
+                      setMessage("Unsaved route points cleared.");
+                    }}
+                  >
+                    Confirm
+                  </button>
+                  <button type="button" onClick={() => setShowClearConfirm(false)}>
+                    Cancel
+                  </button>
+                </span>
+              ) : null}
+
+              <button
+                type="button"
+                className="soft-button"
+                onClick={undoLastPoint}
+                disabled={!editPoints.length}
+              >
+                <Undo2 size={14} />
+                Undo
               </button>
 
               <button
@@ -1072,7 +1506,6 @@ export function RoutePreviewMap({
                 className="soft-button"
                 onClick={recalculatePath}
                 disabled={isCalculating || isSaving || editPoints.length < 2}
-                style={{ padding: "6px 12px", fontSize: "12px" }}
               >
                 <LocateFixed size={14} />
                 {isCalculating ? "Calculating..." : "Recalculate road path"}
@@ -1083,25 +1516,16 @@ export function RoutePreviewMap({
                 className="soft-button primary-action"
                 onClick={saveEditedPath}
                 disabled={isSaving}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: "12px",
-                  opacity: isSaving ? 0.65 : 1,
-                  background: "#13a46b",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "4px"
-                }}
               >
-                {isSaving ? "Saving..." : "Save route path"}
+                {isSaving ? "Snapping..." : "Save route path"}
               </button>
 
               <button
                 type="button"
                 className="soft-button"
                 onClick={toggleEditMode}
-                style={{ padding: "6px 10px", fontSize: "12px" }}
               >
+                <X size={14} />
                 Cancel
               </button>
             </>
@@ -1112,7 +1536,6 @@ export function RoutePreviewMap({
                   type="button"
                   className="soft-button"
                   onClick={toggleEditMode}
-                  style={{ padding: "6px 12px", fontSize: "12px" }}
                 >
                   Manual edit route
                 </button>
@@ -1124,7 +1547,6 @@ export function RoutePreviewMap({
                   className="soft-button"
                   onClick={recalculatePath}
                   disabled={isCalculating}
-                  style={{ padding: "6px 12px", fontSize: "12px" }}
                 >
                   <LocateFixed size={14} />
                   {isCalculating ? "Calculating..." : "Recalculate road path"}
@@ -1133,15 +1555,11 @@ export function RoutePreviewMap({
             </>
           )}
 
-          <div style={{ width: "1px", height: "20px", background: "var(--line)", margin: "0 4px" }} />
+          <div className="route-preview-divider" />
 
           <button
             type="button"
             className={`soft-button ${viewMode === "street" ? "active" : ""}`}
-            style={{
-              padding: "6px 10px",
-              background: viewMode === "street" ? "var(--surface-muted)" : "transparent"
-            }}
             onClick={() => toggleViewMode("street")}
             title="Street view"
           >
@@ -1151,10 +1569,6 @@ export function RoutePreviewMap({
           <button
             type="button"
             className={`soft-button ${viewMode === "satellite" ? "active" : ""}`}
-            style={{
-              padding: "6px 10px",
-              background: viewMode === "satellite" ? "var(--surface-muted)" : "transparent"
-            }}
             onClick={() => toggleViewMode("satellite")}
             title="Satellite view"
           >
@@ -1164,10 +1578,6 @@ export function RoutePreviewMap({
           <button
             type="button"
             className={`soft-button ${isTrafficOn ? "active" : ""}`}
-            style={{
-              padding: "6px 10px",
-              background: isTrafficOn ? "var(--surface-muted)" : "transparent"
-            }}
             onClick={toggleTraffic}
             title={isTrafficOn ? "Traffic On" : "Traffic layer if available"}
           >
@@ -1177,7 +1587,6 @@ export function RoutePreviewMap({
           <button
             type="button"
             className="soft-button"
-            style={{ padding: "6px 10px" }}
             onClick={() => setIsFullscreen((value) => !value)}
             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           >

@@ -198,6 +198,7 @@ export function RouteConfigPage() {
   const [isApplyingReference, setIsApplyingReference] = useState(false);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const referenceMessageTimerRef = useRef<number | null>(null);
 
   const loadRoutes = useCallback(() => api.routes(), []);
   const loadLegacyForward = useCallback(() => api.getLegacyRoutesForward(), []);
@@ -292,6 +293,15 @@ export function RouteConfigPage() {
       });
     }, 80);
   }, [showEditor, editing?.id]);
+
+  useEffect(
+    () => () => {
+      if (referenceMessageTimerRef.current !== null) {
+        window.clearTimeout(referenceMessageTimerRef.current);
+      }
+    },
+    []
+  );
 
   const handleRouteMetrics = useCallback(
     (
@@ -573,7 +583,11 @@ export function RouteConfigPage() {
   const ensureSelectedMainRoute = async () => {
     const routeSeed = getRouteSeed(selectedLineId, direction);
 
-    if (selectedRoute) return selectedRoute;
+    const selectedRouteExtra = asRouteExtra(selectedRoute);
+
+    if (selectedRouteExtra && selectedRouteExtra.source !== "default") {
+      return selectedRouteExtra;
+    }
 
     const existing = await api.getRoute(routeSeed.id).catch(() => null);
     const existingRoute = asRouteExtra(existing?.data || null);
@@ -679,7 +693,17 @@ export function RouteConfigPage() {
         }
       }));
       setMessageIsError(false);
-      setMessage(`Reference path saved with ${waypoints.length} waypoints.`);
+      const successMessage = `Reference path applied — ${waypoints.length} waypoints saved. You can fine-tune it using Manual edit route.`;
+      setMessage(successMessage);
+
+      if (referenceMessageTimerRef.current !== null) {
+        window.clearTimeout(referenceMessageTimerRef.current);
+      }
+
+      referenceMessageTimerRef.current = window.setTimeout(() => {
+        setMessage((current) => (current === successMessage ? null : current));
+        referenceMessageTimerRef.current = null;
+      }, 4000);
     } catch {
       setMessageIsError(true);
       setMessage("Could not save route path. Please try again.");
