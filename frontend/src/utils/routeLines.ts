@@ -19,7 +19,21 @@ export const ROUTE_GOOGLE_MAP_REFS: Record<"fvr-pitx" | "fvr-stcruz", string> = 
   "fvr-stcruz": "https://maps.app.goo.gl/aAXkcU3hhThpB9RG7"
 };
 
-const PITX_KEYWORDS = ["pitx", "pitix"];
+const PITX_KEYWORDS = [
+  "pitx",
+  "pitix",
+  "fvr pitx",
+  "fvr pitx fvr",
+  "gma",
+  "kamuning",
+  "quezon ave",
+  "edsa",
+  "cubao",
+  "ortigas",
+  "guadalupe",
+  "ayala",
+  "magallanes"
+];
 
 const STCRUZ_KEYWORDS = [
   "st cruz",
@@ -68,28 +82,35 @@ export const normalizeRouteLabel = (value?: string | number | null) =>
     .replace(/FVR Terminal/gi, "FVR")
     .trim();
 
-const normalizeLineId = (value?: string | null): MainRouteLineId | null => {
+export const normalizeMainRouteLineId = (
+  value?: string | number | null
+): MainRouteLineId | null => {
   const lineId = normalize(value);
+  const compact = lineId.replace(/\s+/g, "");
 
   if (
-    lineId === "fvr pitx" ||
-    lineId === "fvr pitix" ||
-    lineId === "pitx" ||
-    lineId === "pitix" ||
-    lineId === "fvr pitx fvr"
+    compact === "fvrpitx" ||
+    compact === "fvrpitix" ||
+    compact === "fvrpitxfvr" ||
+    compact === "fvrpitixfvr" ||
+    compact === "pitx" ||
+    compact === "pitix" ||
+    lineId.includes("pitx") ||
+    lineId.includes("gma") ||
+    lineId.includes("kamuning")
   ) {
     return "fvr-pitx";
   }
 
   if (
-    lineId === "fvr stcruz" ||
-    lineId === "fvr st cruz" ||
-    lineId === "fvr st cruz fvr" ||
-    lineId === "fvr muzon st cruz" ||
-    lineId === "fvr muzon st cruz fvr" ||
-    lineId === "stcruz" ||
-    lineId === "st cruz" ||
-    lineId === "muzon"
+    compact === "fvrstcruz" ||
+    compact === "fvrstcruzfvr" ||
+    compact === "fvrmuzonstcruz" ||
+    compact === "fvrmuzonstcruzfvr" ||
+    compact === "stcruz" ||
+    compact === "muzon" ||
+    lineId.includes("st cruz") ||
+    lineId.includes("muzon")
   ) {
     return "fvr-stcruz";
   }
@@ -99,7 +120,12 @@ const normalizeLineId = (value?: string | null): MainRouteLineId | null => {
   return null;
 };
 
+const normalizeLineId = normalizeMainRouteLineId;
+
 const getRouteExtra = (route: RouteConfig) => route as RouteAny;
+
+export const isDefaultRoutePlaceholder = (route: RouteConfig) =>
+  getRouteExtra(route).source === "default";
 
 const buildRouteSearchText = (route: RouteConfig) => {
   const extra = getRouteExtra(route);
@@ -225,18 +251,21 @@ export function getMainRouteLineId(route: RouteConfig): MainRouteLineId {
 }
 
 export function isVisibleMainRoute(route: RouteConfig) {
+  if (isDefaultRoutePlaceholder(route)) return false;
+
   const status = route.status || "active";
   return status === "active" && getMainRouteLineId(route) !== "hidden";
 }
 
 export function groupMainRouteLines(routes: RouteConfig[]): MainRouteLine[] {
-  const visibleRoutes = routes.filter(isVisibleMainRoute);
-  const hiddenRoutes = routes.filter((route) => !isVisibleMainRoute(route));
+  const savedRoutes = routes.filter((route) => !isDefaultRoutePlaceholder(route));
+  const visibleRoutes = savedRoutes.filter(isVisibleMainRoute);
+  const hiddenRoutes = savedRoutes.filter((route) => !isVisibleMainRoute(route));
 
   return [
     {
       id: "fvr-pitx",
-      label: "FVR ↔ PITX",
+      label: "FVR <-> PITX",
       shortLabel: "FVR - PITX - FVR",
       description: "Main loop via GMA / PITX corridor",
       chips: ["FVR", "PITX", "FVR"],
@@ -244,7 +273,7 @@ export function groupMainRouteLines(routes: RouteConfig[]): MainRouteLine[] {
     },
     {
       id: "fvr-stcruz",
-      label: "FVR ↔ MUZON ↔ ST. CRUZ",
+      label: "FVR <-> MUZON <-> ST. CRUZ",
       shortLabel: "FVR - MUZON - ST. CRUZ - FVR",
       description: "Main loop via Muzon and ST. CRUZ",
       chips: ["FVR", "MUZON", "ST. CRUZ", "FVR"],
@@ -285,7 +314,7 @@ export function getRouteStopsLabel(route?: RouteConfig | null) {
     ? route.stops.map((stop) => stop.name).filter(Boolean)
     : [route.origin, route.destination];
 
-  return stops.map(normalizeRouteLabel).join(" → ");
+  return stops.map(normalizeRouteLabel).join(" -> ");
 }
 
 export function getRouteDisplayName(route: RouteConfig) {
@@ -297,8 +326,8 @@ export function getRouteDisplayName(route: RouteConfig) {
 export function getRouteLineLabel(lineId?: MainRouteLineId | string | null) {
   const normalized = normalizeLineId(lineId || "");
 
-  if (normalized === "fvr-pitx") return "FVR ↔ PITX";
-  if (normalized === "fvr-stcruz") return "FVR ↔ MUZON ↔ ST. CRUZ";
+  if (normalized === "fvr-pitx") return "FVR <-> PITX";
+  if (normalized === "fvr-stcruz") return "FVR <-> MUZON <-> ST. CRUZ";
   if (normalized === "hidden") return "Hidden / extra route line";
 
   return "Unlinked route line";

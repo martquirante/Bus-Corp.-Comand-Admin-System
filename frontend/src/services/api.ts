@@ -67,6 +67,10 @@ type RouteWaypointPayload = NonNullable<RouteConfig["waypoints"]>[number] & {
 
 export type RoutePathPayload = {
   waypoints: RouteWaypointPayload[];
+  // Line metadata is persisted with the path so Route Config and Live Fleet Map
+  // can match the saved road path without falling back to legacy fare stops.
+  lineId?: string;
+  routeGroup?: string;
   distanceKm?: number;
   estimatedDurationMinutes?: number;
   trafficDurationMinutes?: number;

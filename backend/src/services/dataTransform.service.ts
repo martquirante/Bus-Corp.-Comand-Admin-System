@@ -17,6 +17,14 @@ const toNumber = (value: unknown, fallback = 0) => {
 const toText = (value: unknown, fallback = "N/A") =>
   typeof value === "string" && value.trim() ? value.trim() : fallback;
 
+const toOptionalText = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+
+  return undefined;
+};
+
 const isOnline = (lastUpdate: number) => Date.now() - lastUpdate < 300000;
 
 const isValidCoordinate = (lat: unknown, lng: unknown) => {
@@ -105,7 +113,15 @@ export const extractFleet = (root: AnyRecord): FleetBus[] => {
       total: cash + gcash,
       passengers,
       lastUpdate,
-      heading: Number.isFinite(Number(live.heading)) ? Number(live.heading) : undefined
+      heading: Number.isFinite(Number(live.heading)) ? Number(live.heading) : undefined,
+      assignedRouteId: toOptionalText(
+        live.assignedRouteId,
+        live.routeId,
+        live.currentRouteId,
+        bus.assignedRouteId,
+        bus.routeId
+      ),
+      lineId: toOptionalText(live.lineId, live.routeLineId, live.routeGroup, bus.lineId)
     };
 
     const existing = unique.get(busNumber);

@@ -14,6 +14,7 @@ import {
   Search,
   TrafficCone
 } from "lucide-react";
+import { getMainRouteLineId, normalizeMainRouteLineId } from "@/utils/routeLines";
 
 type LeafletApi = any;
 type LeafletMap = any;
@@ -153,6 +154,72 @@ const hasAssignedRoute = (bus: FleetBus) => {
 
 const hasValidGps = (bus: FleetBus) => bus.lat !== null && bus.lng !== null;
 
+type FleetRouteLineId = "fvr-pitx" | "fvr-stcruz";
+type RouteExtraFields = RouteConfig & {
+  lineId?: string;
+  routeGroup?: string;
+};
+
+const normalizeMatchText = (value?: string | number | null) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/pitix/g, "pitx")
+    .replace(/st\.?\s*cruz/g, "st cruz")
+    .replace(/sta\.?\s*cruz/g, "st cruz")
+    .replace(/santa\s+cruz/g, "st cruz")
+    .replace(/[_>-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const asFleetRouteLineId = (value?: string | number | null): FleetRouteLineId | null => {
+  const normalized = normalizeMainRouteLineId(value);
+  return normalized === "fvr-pitx" || normalized === "fvr-stcruz" ? normalized : null;
+};
+
+const getRouteLineIdForMap = (route: RouteConfig): FleetRouteLineId | null => {
+  const extra = route as RouteExtraFields;
+  const explicit = asFleetRouteLineId(extra.lineId || extra.routeGroup);
+  if (explicit) return explicit;
+
+  const inferred = getMainRouteLineId(route);
+  return inferred === "fvr-pitx" || inferred === "fvr-stcruz" ? inferred : null;
+};
+
+const getBusLineId = (bus: FleetBus): FleetRouteLineId | null =>
+  asFleetRouteLineId(bus.lineId || bus.route || bus.assignedRouteId || "");
+
+const firstTerminalIndex = (text: string, terminals: string[]) =>
+  terminals.reduce((best, terminal) => {
+    const index = text.indexOf(terminal);
+    if (index === -1) return best;
+    return best === -1 ? index : Math.min(best, index);
+  }, -1);
+
+const getBusDirection = (bus: FleetBus): RouteConfig["direction"] | null => {
+  const text = normalizeMatchText(`${bus.route || ""} ${bus.assignedRouteId || ""}`);
+
+  if (!text) return null;
+  if (text.includes("reverse")) return "reverse";
+  if (text.includes("forward")) return "forward";
+
+  const fvrIndex = text.indexOf("fvr");
+  const terminalIndex = firstTerminalIndex(text, ["pitx", "st cruz", "stcruz"]);
+
+  if (fvrIndex === -1 || terminalIndex === -1) return null;
+  return fvrIndex < terminalIndex ? "forward" : "reverse";
+};
+
+const routeMatchesBus = (route: RouteConfig, bus: FleetBus) => {
+  if (bus.assignedRouteId && route.id === bus.assignedRouteId) return true;
+
+  const routeLineId = getRouteLineIdForMap(route);
+  const busLineId = getBusLineId(bus);
+  if (!routeLineId || !busLineId || routeLineId !== busLineId) return false;
+
+  const busDirection = getBusDirection(bus);
+  return !busDirection || route.direction === busDirection;
+};
+
 export function FleetMap({
   buses,
   routes = [],
@@ -182,17 +249,59 @@ export function FleetMap({
 
   const mapBuses = useMemo(() => buses.filter((bus) => hasAssignedRoute(bus) && hasValidGps(bus)), [buses]);
   const hasGps = mapBuses.length > 0;
+  const selectedRouteBus = useMemo(() => {
+    if (followedBusId) {
+      return mapBuses.find((bus) => bus.id === followedBusId) || null;
+    }
+
+    if (focusBus) {
+      const needle = focusBus.toLowerCase();
+      return (
+        mapBuses.find((bus) =>
+          [bus.id, bus.busNumber, bus.driver, bus.conductor]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(needle))
+        ) || null
+      );
+    }
+
+    return null;
+  }, [focusBus, followedBusId, mapBuses]);
   const routesWithWaypoints = useMemo(
-    () =>
-      routes
+    () => {
+      const activeRouteKeys = new Set<string>();
+
+      mapBuses.forEach((bus) => {
+        const lineId = getBusLineId(bus);
+        if (!lineId) return;
+
+        const busDirection = getBusDirection(bus);
+        activeRouteKeys.add(`${lineId}:${busDirection || "any"}`);
+      });
+
+      return routes
         .map((route) => ({
           ...route,
           points: (route.waypoints || [])
             .filter((point) => typeof point.lat === "number" && typeof point.lng === "number")
             .map((point) => [point.lat as number, point.lng as number] as [number, number])
         }))
-        .filter((route) => route.points.length > 1),
-    [routes]
+        .filter((route) => route.points.length > 1)
+        .filter((route) => {
+          if (selectedRouteBus) return routeMatchesBus(route, selectedRouteBus);
+
+          const lineId = getRouteLineIdForMap(route);
+          if (!lineId) return false;
+
+          if (!activeRouteKeys.size) return true;
+
+          return (
+            activeRouteKeys.has(`${lineId}:${route.direction}`) ||
+            activeRouteKeys.has(`${lineId}:any`)
+          );
+        });
+    },
+    [mapBuses, routes, selectedRouteBus]
   );
 
   useEffect(() => {
@@ -350,13 +459,12 @@ export function FleetMap({
     routeLayerRef.current = group;
 
     routesWithWaypoints.forEach((route) => {
-      const isPitx = route.id.toLowerCase().includes("pitx");
+      const isPitx = getRouteLineIdForMap(route) === "fvr-pitx";
       L.polyline(route.points, {
         color: isPitx ? "#13a46b" : "#0f7ad3",
         weight: 6,
         opacity: 0.78,
-        lineCap: "round",
-        dashArray: route.direction === "reverse" ? "10 12" : undefined
+        lineCap: "round"
       })
         .addTo(group)
         .bindPopup(
@@ -544,10 +652,10 @@ export function FleetMap({
       ) : null}
 
       <div className="map-route-strip">
-        {routes.slice(0, 4).map((route) => (
+        {routesWithWaypoints.slice(0, 4).map((route) => (
           <span key={route.id}>{route.routeName || `${route.origin} to ${route.destination}`}</span>
         ))}
-        {!routes.length ? <span>AdminRoutes not loaded yet</span> : null}
+        {!routesWithWaypoints.length ? <span>No matching saved route path yet</span> : null}
       </div>
 
       {mapError ? <div className="map-error-banner">{mapError}</div> : null}

@@ -167,6 +167,7 @@ const normalizeText = (value: unknown) =>
     .replace(/st\.?\s*cruz/g, "st cruz")
     .replace(/sta\.?\s*cruz/g, "st cruz")
     .replace(/santa\s+cruz/g, "st cruz")
+    .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -174,14 +175,28 @@ const pathFor = (direction: RouteDirection) => routePathByDirection[direction];
 
 const inferLineId = (route: Partial<ExtendedRouteConfig> | RawRoute): string => {
   const explicit = normalizeText(route.lineId || route.routeGroup);
-
-  if (explicit === "fvr-pitx" || explicit === "pitx") return "fvr-pitx";
+  const explicitCompact = explicit.replace(/\s+/g, "");
 
   if (
-    explicit === "fvr-stcruz" ||
-    explicit === "fvr-st-cruz" ||
-    explicit === "st cruz" ||
-    explicit === "muzon"
+    explicitCompact === "fvrpitx" ||
+    explicitCompact === "fvrpitxfvr" ||
+    explicitCompact === "pitx" ||
+    explicit.includes("pitx") ||
+    explicit.includes("gma") ||
+    explicit.includes("kamuning")
+  ) {
+    return "fvr-pitx";
+  }
+
+  if (
+    explicitCompact === "fvrstcruz" ||
+    explicitCompact === "fvrstcruzfvr" ||
+    explicitCompact === "fvrmuzonstcruz" ||
+    explicitCompact === "fvrmuzonstcruzfvr" ||
+    explicitCompact === "stcruz" ||
+    explicitCompact === "muzon" ||
+    explicit.includes("st cruz") ||
+    explicit.includes("muzon")
   ) {
     return "fvr-stcruz";
   }
@@ -199,7 +214,9 @@ const inferLineId = (route: Partial<ExtendedRouteConfig> | RawRoute): string => 
     ].join(" ")
   );
 
-  if (text.includes("pitx")) return "fvr-pitx";
+  if (text.includes("pitx") || text.includes("gma") || text.includes("kamuning")) {
+    return "fvr-pitx";
+  }
 
   if (
     text.includes("st cruz") ||
@@ -738,6 +755,8 @@ export const routeService = {
     id: string,
     patch: {
       waypoints?: ExtendedRouteConfig["waypoints"];
+      lineId?: string;
+      routeGroup?: string;
       distanceKm?: number;
       estimatedDurationMinutes?: number;
       trafficDurationMinutes?: number;
@@ -749,17 +768,21 @@ export const routeService = {
     actor = "system"
   ): Promise<RouteConfig> {
     const current = asExtendedRoute(await this.getRouteById(id));
+    const lineId = patch.lineId ?? current?.lineId;
+    const routeGroup = patch.routeGroup ?? current?.routeGroup ?? routeGroupForLineId(lineId);
 
     const reference =
       patch.googleMapReferenceUrl ||
       patch.mapReferenceUrl ||
       current?.googleMapReferenceUrl ||
       current?.mapReferenceUrl ||
-      referenceForLineId(current?.lineId);
+      referenceForLineId(lineId);
 
-    return this.updateRoute(
+    const updatedRoute = await this.updateRoute(
       id,
       {
+        lineId,
+        routeGroup,
         waypoints: patch.waypoints ?? current?.waypoints ?? [],
         distanceKm: patch.distanceKm ?? current?.distanceKm,
         distance: patch.distanceKm ?? current?.distance,
@@ -774,6 +797,14 @@ export const routeService = {
       },
       actor
     );
+
+    try {
+      await supabaseService.syncRoute(updatedRoute);
+    } catch (error) {
+      console.warn("[routes] Supabase route path sync skipped.", error);
+    }
+
+    return updatedRoute;
   },
 
   async updateRouteReference(

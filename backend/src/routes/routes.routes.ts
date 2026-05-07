@@ -61,7 +61,7 @@ routesRoutes.delete(
 // ─── AdminRoutes path / map geometry ────────────────────────────────────────
 //
 // These endpoints update the actual route path used by Route Config and
-// Live Fleet Map. They save to Firebase AdminRoutes.
+// Live Fleet Map. They save curated/manual waypoints to Firebase AdminRoutes.
 
 routesRoutes.patch(
   "/:id/path",

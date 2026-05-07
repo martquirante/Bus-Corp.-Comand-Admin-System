@@ -30,6 +30,7 @@ import {
   getRouteLineLabel,
   getRouteStopsLabel,
   groupMainRouteLines,
+  isDefaultRoutePlaceholder,
   normalizeRouteLabel
 } from "@/utils/routeLines";
 import {
@@ -89,6 +90,39 @@ const emptyForm = {
 
 const toWholePesoValue = (value: string | number | null | undefined) =>
   Math.round(Number(value) || 0);
+
+const calculateReferenceDistanceKm = (
+  points: Array<{ lat: number; lng: number }>
+) => {
+  if (points.length < 2) return undefined;
+
+  const radius = 6371;
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  let totalKm = 0;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const dLat = toRad(next.lat - current.lat);
+    const dLng = toRad(next.lng - current.lng);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(current.lat)) *
+        Math.cos(toRad(next.lat)) *
+        Math.sin(dLng / 2) ** 2;
+
+    totalKm += radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  return Number(totalKm.toFixed(1));
+};
+
+const estimateReferenceDurationMinutes = (distanceKm?: number) => {
+  if (!distanceKm) return undefined;
+
+  const averageKph = distanceKm > 40 ? 28 : 22;
+  return Math.max(1, Math.round((distanceKm / averageKph) * 60 * 1.25));
+};
 
 const getRouteSeed = (
   selectedLineId: MainRouteLineId,
@@ -174,6 +208,10 @@ export function RouteConfigPage() {
   const legacyReverse = useApiResource(loadLegacyReverse);
 
   const rows = useMemo(() => routes.data || [], [routes.data]);
+  const savedRows = useMemo(
+    () => rows.filter((route) => !isDefaultRoutePlaceholder(route)),
+    [rows]
+  );
   const routeLines = useMemo(() => groupMainRouteLines(rows), [rows]);
   const visibleLines = routeLines.filter((line) => line.id !== "hidden");
   const hiddenLine = routeLines.find((line) => line.id === "hidden");
@@ -197,8 +235,8 @@ export function RouteConfigPage() {
   );
 
   const mapRoutes = useMemo(
-    () => (showAllRoutesOnMap ? rows : selectedRoute ? [selectedRoute] : []),
-    [showAllRoutesOnMap, rows, selectedRoute]
+    () => (showAllRoutesOnMap ? savedRows : selectedRoute ? [selectedRoute] : []),
+    [showAllRoutesOnMap, savedRows, selectedRoute]
   );
 
   const activeReferenceUrl =
@@ -336,10 +374,12 @@ export function RouteConfigPage() {
       route.mapReferenceUrl ||
       getGoogleMapReferenceForLine(nextLineId) ||
       REFERENCE_GOOGLE_MAP_LINKS[nextLineId];
+    const line = routeLines.find((item) => item.id === nextLineId);
+    const mainRouteForFareStop = line ? getPrimaryRouteForLine(line, route.direction) : null;
 
     setSelectedLineId(nextLineId);
     setEditing(route);
-    setSelectedRouteId(selectedRoute?.id || null);
+    setSelectedRouteId(mainRouteForFareStop?.id || null);
     setDirection(route.direction);
     setShowEditor(true);
     setMessage(null);
@@ -594,25 +634,28 @@ export function RouteConfigPage() {
         destination:
           index === referencePoints.length - 1 ? routeForPath.destination : undefined
       }));
+      const distanceKm = calculateReferenceDistanceKm(referencePoints);
+      const estimatedDurationMinutes = estimateReferenceDurationMinutes(distanceKm);
 
       await api.updateRoutePath(routeForPath.id, {
         waypoints,
+        ...(distanceKm ? { distanceKm } : {}),
+        ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
         mapReferenceUrl: googleReferenceUrl,
         googleMapReferenceUrl: googleReferenceUrl,
-        routeGeometrySource: "manual"
+        routeGeometrySource: "curated-reference",
+        lineId: selectedLineId,
+        routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
       });
 
+      await routes.refresh();
       setShowAllRoutesOnMap(false);
       setSelectedRouteId(routeForPath.id);
       setMessageIsError(false);
-      setMessage(
-        "Reference route path applied. You can still use Manual edit route to fine-tune the line, then Save route path."
-      );
-
-      await routes.refresh();
+      setMessage("Reference route path applied. You can still fine-tune it manually.");
     } catch {
       setMessageIsError(true);
-      setMessage("Could not apply the reference route path. Please try again.");
+      setMessage("Could not save route path. Please try again.");
     } finally {
       setIsApplyingReference(false);
     }
@@ -729,15 +772,18 @@ export function RouteConfigPage() {
                     ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
                     mapReferenceUrl: activeReferenceUrl,
                     googleMapReferenceUrl: activeReferenceUrl,
-                    routeGeometrySource: "manual"
+                    routeGeometrySource: "manual",
+                    lineId: selectedLineId,
+                    routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
                   });
 
                   setMessageIsError(false);
-                  setMessage("Route path saved to Firebase AdminRoutes. Live Fleet Map will use this path.");
+                  setMessage("Route path saved. Live Fleet Map will use this route.");
                   await routes.refresh();
                 } catch {
                   setMessageIsError(true);
-                  setMessage("Failed to save route path. Your saved route was not changed.");
+                  setMessage("Could not save route path. Please try again.");
+                  throw new Error("Could not save route path.");
                 }
               }}
             />
@@ -745,10 +791,12 @@ export function RouteConfigPage() {
             <div className="friendly-message" style={{ minHeight: 260, display: "grid", placeItems: "center" }}>
               <div style={{ textAlign: "center" }}>
                 <strong>
-                  No {direction} main route exists yet for {getRouteLineLabel(selectedLineId)}.
+                  {direction === "reverse"
+                    ? `No reverse route exists yet for ${getRouteLineLabel(selectedLineId)}.`
+                    : `No forward route exists yet for ${getRouteLineLabel(selectedLineId)}.`}
                 </strong>
                 <p style={{ margin: "8px 0 14px", color: "var(--muted)" }}>
-                  Click Use reference route path to create this direction and save its route line.
+                  Click Create from reference path.
                 </p>
                 <button
                   type="button"
@@ -818,7 +866,7 @@ export function RouteConfigPage() {
                     <strong>{line.shortLabel}</strong>
                     <span>
                       {activeRoute
-                        ? `${line.routes.length} active direction records`
+                        ? `${direction === "forward" ? "Forward" : "Reverse"} route ready`
                         : `No ${direction} direction yet`}
                     </span>
                   </div>
@@ -843,7 +891,11 @@ export function RouteConfigPage() {
                           setMessage("Selected route is now shown on the map. Use Manual edit route to update its path.");
                         } else {
                           setSelectedRouteId(null);
-                          setMessage(`No ${direction} route exists yet. Click Use reference route path to create it.`);
+                          setMessage(
+                            direction === "reverse"
+                              ? "No reverse route yet. Create it from the reference path."
+                              : "No forward route yet. Create it from the reference path."
+                          );
                         }
                       }}
                     >
@@ -889,7 +941,7 @@ export function RouteConfigPage() {
           </div>
           <div>
             <dt>Stops</dt>
-            <dd>{selectedRoute ? getRouteStopsLabel(selectedRoute) : `${selectedRouteSeed.origin} → ${selectedRouteSeed.destination}`}</dd>
+            <dd>{selectedRoute ? getRouteStopsLabel(selectedRoute) : `${selectedRouteSeed.origin} to ${selectedRouteSeed.destination}`}</dd>
           </div>
           <div>
             <dt>Fare</dt>
@@ -949,7 +1001,7 @@ export function RouteConfigPage() {
 
                 {editingExtra?.source === "legacy" && form.destination ? (
                   <p className="form-hint friendly-message" style={{ marginTop: 4 }}>
-                    Editing fare stop: {form.origin} → {form.destination}
+                    Editing fare stop: {form.origin} to {form.destination}
                   </p>
                 ) : null}
               </div>
@@ -1094,7 +1146,7 @@ export function RouteConfigPage() {
               Conductors will no longer see this destination.
               <br />
               <strong style={{ color: "var(--text)" }}>
-                {normalizeRouteLabel(deleteConfirmRow.origin)} → {normalizeRouteLabel(deleteConfirmRow.destination)}
+                {normalizeRouteLabel(deleteConfirmRow.origin)} to {normalizeRouteLabel(deleteConfirmRow.destination)}
               </strong>
             </p>
 

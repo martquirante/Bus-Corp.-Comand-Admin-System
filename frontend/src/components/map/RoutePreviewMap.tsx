@@ -1,17 +1,38 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { RouteConfig } from "@pos-bus/shared";
-import { Maximize2, Minimize2, Map, Satellite, TrafficCone } from "lucide-react";
+import {
+  LocateFixed,
+  Map,
+  Maximize2,
+  Minimize2,
+  Plus,
+  Satellite,
+  Search,
+  TrafficCone,
+  Trash2
+} from "lucide-react";
 import { getRouteDisplayName, normalizeRouteLabel } from "@/utils/routeLines";
 
 type LeafletApi = any;
 type LeafletMap = any;
 type LeafletLayer = any;
 
+type LatLngPoint = [number, number];
+
 type RouteExtraFields = RouteConfig & {
   lineId?: string;
   trafficDurationMinutes?: number;
+};
+
+type SearchResult = {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+  type?: string;
+  class?: string;
 };
 
 declare global {
@@ -23,7 +44,7 @@ declare global {
 
 const LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-const DEFAULT_CENTER: [number, number] = [14.8078, 121.0111];
+const DEFAULT_CENTER: LatLngPoint = [14.8078, 121.0111];
 const OPENROUTESERVICE_KEY = process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY;
 
 const asRouteExtra = (route: RouteConfig): RouteExtraFields => route as RouteExtraFields;
@@ -64,34 +85,46 @@ const hasCoordinate = (point: { lat?: number; lng?: number }) =>
   Number.isFinite(point.lng) &&
   !(point.lat === 0 && point.lng === 0);
 
-const getRoutePoints = (route: RouteConfig) => {
-  const waypointPoints = (route.waypoints || [])
-    .filter(hasCoordinate)
-    .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0))
-    .map((point) => [point.lat as number, point.lng as number] as [number, number]);
+const sortBySavedOrder = <T extends { sequence?: number }>(points: T[]) =>
+  points
+    .map((point, index) => ({ point, index }))
+    .sort((a, b) => {
+      const sequenceA = Number.isFinite(Number(a.point.sequence))
+        ? Number(a.point.sequence)
+        : a.index + 1;
+      const sequenceB = Number.isFinite(Number(b.point.sequence))
+        ? Number(b.point.sequence)
+        : b.index + 1;
+
+      return sequenceA - sequenceB;
+    })
+    .map(({ point }) => point);
+
+const getRoutePoints = (route: RouteConfig): LatLngPoint[] => {
+  const waypointPoints = sortBySavedOrder((route.waypoints || []).filter(hasCoordinate))
+    .map((point) => [point.lat as number, point.lng as number] as LatLngPoint);
 
   if (waypointPoints.length > 1) return waypointPoints;
 
-  return (route.stops || [])
-    .filter(hasCoordinate)
-    .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0))
-    .map((point) => [point.lat as number, point.lng as number] as [number, number]);
+  return sortBySavedOrder((route.stops || []).filter(hasCoordinate))
+    .map((point) => [point.lat as number, point.lng as number] as LatLngPoint);
 };
 
-const formatDuration = (minutes?: number) => {
-  const mins = Math.round(Number(minutes) || 0);
+const haversineMeters = ([lat1, lng1]: LatLngPoint, [lat2, lng2]: LatLngPoint) => {
+  const radius = 6371000;
+  const toRad = (value: number) => (value * Math.PI) / 180;
 
-  if (!mins) return "";
-  if (mins < 60) return `${mins} min`;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
 
-  const hrs = Math.floor(mins / 60);
-  const rem = mins % 60;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
 
-  if (rem === 0) return `${hrs} hr`;
-  return `${hrs} hr ${rem} min`;
+  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-const calculateLineDistanceKm = (points: [number, number][], map?: LeafletMap | null) => {
+const calculateLineDistanceKm = (points: LatLngPoint[], map?: LeafletMap | null) => {
   if (points.length < 2) return undefined;
 
   let totalMeters = 0;
@@ -110,20 +143,6 @@ const calculateLineDistanceKm = (points: [number, number][], map?: LeafletMap | 
   return Number((totalMeters / 1000).toFixed(1));
 };
 
-const haversineMeters = ([lat1, lng1]: [number, number], [lat2, lng2]: [number, number]) => {
-  const radius = 6371000;
-  const toRad = (value: number) => (value * Math.PI) / 180;
-
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-
-  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
 const estimateTrafficDurationMinutes = (distanceKm?: number) => {
   if (!distanceKm) return undefined;
 
@@ -134,7 +153,7 @@ const estimateTrafficDurationMinutes = (distanceKm?: number) => {
   return Math.max(1, Math.round(baseMinutes * trafficBuffer));
 };
 
-async function fetchFromOsrm(points: [number, number][]) {
+async function fetchFromOsrm(points: LatLngPoint[]) {
   const coords = points.map(([lat, lng]) => `${lng},${lat}`).join(";");
   const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
 
@@ -155,14 +174,14 @@ async function fetchFromOsrm(points: [number, number][]) {
   const trafficAdjustedMinutes = baseMinutes ? Math.round(baseMinutes * 1.35) : undefined;
 
   return {
-    points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as [number, number]),
+    points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as LatLngPoint),
     distanceKm:
       typeof route.distance === "number" ? Number((route.distance / 1000).toFixed(1)) : undefined,
     estimatedDurationMinutes: trafficAdjustedMinutes
   };
 }
 
-async function fetchFromOpenRouteService(points: [number, number][]) {
+async function fetchFromOpenRouteService(points: LatLngPoint[]) {
   if (!OPENROUTESERVICE_KEY) {
     throw new Error("OpenRouteService API key is not configured.");
   }
@@ -192,13 +211,13 @@ async function fetchFromOpenRouteService(points: [number, number][]) {
   const trafficAdjustedMinutes = baseMinutes ? Math.round(baseMinutes * 1.35) : undefined;
 
   return {
-    points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as [number, number]),
+    points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as LatLngPoint),
     distanceKm: route?.distance ? Number((route.distance / 1000).toFixed(1)) : undefined,
     estimatedDurationMinutes: trafficAdjustedMinutes
   };
 }
 
-async function fetchRoadGeometry(points: [number, number][]) {
+async function fetchRoadGeometry(points: LatLngPoint[]) {
   if (points.length < 2) {
     return {
       points,
@@ -228,6 +247,11 @@ const getRouteColor = (route: RouteConfig) => {
   return "#0f7ad3";
 };
 
+const shortPlaceName = (value: string) => {
+  const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+  return parts.slice(0, 3).join(", ");
+};
+
 export function RoutePreviewMap({
   routes,
   selectedRouteId,
@@ -242,10 +266,10 @@ export function RoutePreviewMap({
   ) => void;
   onSaveWaypoints?: (
     routeId: string,
-    points: [number, number][],
+    points: LatLngPoint[],
     distanceKm?: number,
     estimatedDurationMinutes?: number
-  ) => void;
+  ) => Promise<void> | void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
@@ -254,10 +278,12 @@ export function RoutePreviewMap({
   const streetLayerRef = useRef<LeafletLayer | null>(null);
   const satelliteLayerRef = useRef<LeafletLayer | null>(null);
   const trafficLayerRef = useRef<LeafletLayer | null>(null);
+  const metricsCallbackRef = useRef<typeof onRouteMetrics>(onRouteMetrics);
 
   const [message, setMessage] = useState<string>("Showing saved waypoints.");
   const [isCalculating, setIsCalculating] = useState(false);
-  const [computedRoads, setComputedRoads] = useState<Record<string, [number, number][]>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [computedRoads, setComputedRoads] = useState<Record<string, LatLngPoint[]>>({});
   const [computedMetrics, setComputedMetrics] = useState<
     Record<string, { distanceKm?: number; estimatedDurationMinutes?: number }>
   >({});
@@ -266,8 +292,16 @@ export function RoutePreviewMap({
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [isEditing, setIsEditing] = useState(false);
-  const [editPoints, setEditPoints] = useState<[number, number][]>([]);
+  const [editPoints, setEditPoints] = useState<LatLngPoint[]>([]);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  useEffect(() => {
+    metricsCallbackRef.current = onRouteMetrics;
+  }, [onRouteMetrics]);
 
   const visibleRoutes = useMemo(
     () =>
@@ -281,7 +315,7 @@ export function RoutePreviewMap({
     if (!visibleRoutes.length) return null;
 
     if (selectedRouteId) {
-      return visibleRoutes.find((entry) => entry.route.id === selectedRouteId) || visibleRoutes[0];
+      return visibleRoutes.find((entry) => entry.route.id === selectedRouteId) || null;
     }
 
     return visibleRoutes[0];
@@ -334,7 +368,7 @@ export function RoutePreviewMap({
             estimatedDurationMinutes
           }
         }));
-        onRouteMetrics?.(entry.route.id, {
+        metricsCallbackRef.current?.(entry.route.id, {
           distanceKm,
           estimatedDurationMinutes
         });
@@ -349,6 +383,80 @@ export function RoutePreviewMap({
     } finally {
       setIsCalculating(false);
     }
+  };
+
+  const searchPlaces = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+
+    const query = searchQuery.trim();
+
+    if (!query) {
+      setMessage("Type a place or stop name first.");
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchResults([]);
+    setMessage("Searching place...");
+
+    try {
+      const params = new URLSearchParams({
+        format: "json",
+        q: `${query}, Philippines`,
+        limit: "6",
+        addressdetails: "1"
+      });
+
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+        headers: {
+          Accept: "application/json"
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error("Search is unavailable right now.");
+      }
+
+      const results = (await response.json()) as SearchResult[];
+
+      setSearchResults(results);
+      setMessage(
+        results.length
+          ? "Select a search result to add it as a route point."
+          : "No place found. Try a more specific place name."
+      );
+    } catch {
+      setMessage("Search is unavailable right now. You can still click the map to add points.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const addSearchResultAsPoint = (result: SearchResult) => {
+    const lat = Number(result.lat);
+    const lng = Number(result.lon);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setMessage("This search result has no usable map location.");
+      return;
+    }
+
+    const point: LatLngPoint = [lat, lng];
+
+    setEditPoints((previous) => {
+      const next = [...previous, point];
+      setSelectedPointIndex(next.length - 1);
+      return next;
+    });
+
+    const map = mapRef.current;
+    if (map) {
+      map.setView(point, Math.max(map.getZoom?.() || 13, 14));
+    }
+
+    setMessage(`${shortPlaceName(result.display_name)} added as a route point.`);
+    setSearchResults([]);
+    setSearchQuery("");
   };
 
   useEffect(() => {
@@ -398,22 +506,22 @@ export function RoutePreviewMap({
     const map = mapRef.current;
     if (!map) return;
 
-    map.off("click");
-
-    map.on("click", (event: any) => {
+    const handleClick = (event: any) => {
       if (!isEditing) return;
 
       const { lat, lng } = event.latlng;
 
       setEditPoints((previous) => {
-        const next = [...previous, [lat, lng]] as [number, number][];
+        const next = [...previous, [lat, lng]] as LatLngPoint[];
         setSelectedPointIndex(next.length - 1);
         return next;
       });
-    });
+    };
+
+    map.on("click", handleClick);
 
     return () => {
-      map.off("click");
+      map.off("click", handleClick);
     };
   }, [isEditing]);
 
@@ -499,24 +607,25 @@ export function RoutePreviewMap({
           color: "#dc3d35",
           weight: 5,
           opacity: 0.95,
-          lineCap: "round"
+          lineCap: "round",
+          lineJoin: "round"
         }).addTo(editGroup);
       }
 
       editPoints.forEach((point, index) => {
         const isSelected = index === selectedPointIndex;
         const label =
-          index === 0 ? "Origin" : index === editPoints.length - 1 ? "Destination" : `${index + 1}`;
+          index === 0 ? "Start" : index === editPoints.length - 1 ? "End" : `${index + 1}`;
 
         const marker = L.marker(point, {
           draggable: true,
           icon: L.divIcon({
             className: `edit-marker ${isSelected ? "selected" : ""}`,
-            html: `<div style="display:grid;place-items:center;min-width:24px;height:24px;padding:0 6px;background:${
+            html: `<div style="display:grid;place-items:center;min-width:28px;height:28px;padding:0 7px;background:${
               isSelected ? "#ffeb3b" : "#fff"
             };border:2px solid #dc3d35;border-radius:999px;color:#111;font-size:10px;font-weight:900;box-shadow:0 6px 14px rgba(0,0,0,.24);">${label}</div>`,
-            iconSize: [32, 28],
-            iconAnchor: [16, 14]
+            iconSize: [38, 32],
+            iconAnchor: [19, 16]
           })
         }).addTo(editGroup);
 
@@ -556,9 +665,8 @@ export function RoutePreviewMap({
       return;
     }
 
-    setMessage("Showing saved route path. Recalculate only if you want a new preview.");
-
-    const allBounds: [number, number][] = [];
+    const allBounds: LatLngPoint[] = [];
+    let drawnRouteCount = 0;
 
     for (const entry of visibleRoutes) {
       if (cancelled) break;
@@ -571,14 +679,14 @@ export function RoutePreviewMap({
       const routePoints = computedRoads[entry.route.id] || entry.points;
 
       if (routePoints.length < 2) continue;
+      drawnRouteCount += 1;
 
       L.polyline(routePoints, {
         color: routeColor,
         weight: isSelected ? 8 : 3,
         opacity: isSelected ? 1 : 0.18,
         lineCap: "round",
-        lineJoin: "round",
-        dashArray: entry.route.direction === "reverse" ? "10 12" : undefined
+        lineJoin: "round"
       })
         .addTo(group)
         .bindPopup(
@@ -595,8 +703,8 @@ export function RoutePreviewMap({
           icon: L.divIcon({
             className: "route-terminal-marker origin",
             html: `<span>Start: ${normalizeRouteLabel(entry.route.origin || "Origin")}</span>`,
-            iconSize: [160, 28],
-            iconAnchor: [80, 14]
+            iconSize: [170, 28],
+            iconAnchor: [85, 14]
           })
         }).addTo(group);
       }
@@ -606,8 +714,8 @@ export function RoutePreviewMap({
           icon: L.divIcon({
             className: "route-terminal-marker finish",
             html: `<span>End: ${normalizeRouteLabel(entry.route.destination || "Destination")}</span>`,
-            iconSize: [160, 28],
-            iconAnchor: [80, 14]
+            iconSize: [170, 28],
+            iconAnchor: [85, 14]
           })
         }).addTo(group);
       }
@@ -624,7 +732,7 @@ export function RoutePreviewMap({
         entry.route.estimatedDurationMinutes ??
         estimateTrafficDurationMinutes(distanceKm);
 
-      onRouteMetrics?.(entry.route.id, {
+      metricsCallbackRef.current?.(entry.route.id, {
         distanceKm,
         estimatedDurationMinutes
       });
@@ -633,6 +741,10 @@ export function RoutePreviewMap({
     if (!cancelled) {
       if (allBounds.length) {
         map.fitBounds(allBounds, { padding: [42, 42], maxZoom: 15 });
+        setMessage("Showing saved route path. Recalculate only if you want a new preview.");
+      } else if (drawnRouteCount === 0) {
+        setMessage("No saved route path yet. Use reference route path or Manual edit route to add points.");
+        map.setView(DEFAULT_CENTER, 12);
       }
 
       window.setTimeout(() => map.invalidateSize({ animate: true }), 180);
@@ -648,8 +760,7 @@ export function RoutePreviewMap({
     computedMetrics,
     isEditing,
     editPoints,
-    selectedPointIndex,
-    onRouteMetrics
+    selectedPointIndex
   ]);
 
   const toggleEditMode = () => {
@@ -657,11 +768,12 @@ export function RoutePreviewMap({
       setIsEditing(false);
       setEditPoints([]);
       setSelectedPointIndex(null);
+      setSearchResults([]);
       setMessage("Manual route editing cancelled.");
       return;
     }
 
-    let initialPoints: [number, number][] = [];
+    let initialPoints: LatLngPoint[] = [];
 
     if (selectedRouteEntry) {
       initialPoints =
@@ -673,7 +785,7 @@ export function RoutePreviewMap({
     setEditPoints(initialPoints);
     setSelectedPointIndex(null);
     setIsEditing(true);
-    setMessage("Manual edit mode: click the map to add waypoints, or drag existing points.");
+    setMessage("Manual edit mode: click the map or search a place to add route points.");
   };
 
   const removeSelectedPoint = () => {
@@ -683,7 +795,7 @@ export function RoutePreviewMap({
     setSelectedPointIndex(null);
   };
 
-  const saveEditedPath = () => {
+  const saveEditedPath = async () => {
     if (!onSaveWaypoints) {
       setMessage("Saving is not supported in this view.");
       return;
@@ -706,28 +818,34 @@ export function RoutePreviewMap({
       computedMetrics[targetRouteId]?.estimatedDurationMinutes ||
       estimateTrafficDurationMinutes(distanceKm);
 
-    onSaveWaypoints(targetRouteId, editPoints, distanceKm, estimatedDurationMinutes);
+    setIsSaving(true);
+    setMessage("Saving route path...");
 
-    setComputedRoads((current) => ({
-      ...current,
-      [targetRouteId]: editPoints
-    }));
+    try {
+      await onSaveWaypoints(targetRouteId, editPoints, distanceKm, estimatedDurationMinutes);
 
-    setComputedMetrics((current) => ({
-      ...current,
-      [targetRouteId]: {
-        distanceKm,
-        estimatedDurationMinutes
-      }
-    }));
+      setComputedRoads((current) => ({
+        ...current,
+        [targetRouteId]: editPoints
+      }));
 
-    setIsEditing(false);
-    setSelectedPointIndex(null);
-    setMessage(
-      `Route path saved locally. Distance: ${distanceKm || "N/A"} km${
-        estimatedDurationMinutes ? `, Estimated: ${formatDuration(estimatedDurationMinutes)} with traffic` : ""
-      }.`
-    );
+      setComputedMetrics((current) => ({
+        ...current,
+        [targetRouteId]: {
+          distanceKm,
+          estimatedDurationMinutes
+        }
+      }));
+
+      setIsEditing(false);
+      setSelectedPointIndex(null);
+      setSearchResults([]);
+      setMessage("Route path saved. Live Fleet Map will use this route.");
+    } catch {
+      setMessage("Could not save route path. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const activeRouteName = selectedRouteEntry?.route
@@ -753,6 +871,91 @@ export function RoutePreviewMap({
         }}
       />
 
+      {isEditing ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            zIndex: 900,
+            width: "min(420px, calc(100% - 24px))",
+            background: "color-mix(in srgb, var(--surface-strong) 94%, transparent)",
+            border: "1px solid var(--line)",
+            borderRadius: 14,
+            boxShadow: "0 18px 36px rgba(0,0,0,.28)",
+            padding: 10
+          }}
+        >
+          <form onSubmit={searchPlaces} style={{ display: "flex", gap: 8 }}>
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search stop/place, e.g. SM City Fairview"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: "1px solid var(--line)",
+                borderRadius: 10,
+                padding: "9px 10px",
+                background: "var(--surface)",
+                color: "var(--text)"
+              }}
+            />
+
+            <button
+              type="submit"
+              className="soft-button"
+              disabled={isSearching}
+              style={{ padding: "8px 10px", fontSize: 12 }}
+            >
+              <Search size={14} />
+              {isSearching ? "Searching..." : "Search"}
+            </button>
+          </form>
+
+          {searchResults.length ? (
+            <div
+              style={{
+                marginTop: 8,
+                display: "grid",
+                gap: 6,
+                maxHeight: 220,
+                overflowY: "auto"
+              }}
+            >
+              {searchResults.map((result) => (
+                <button
+                  key={result.place_id}
+                  type="button"
+                  onClick={() => addSearchResultAsPoint(result)}
+                  style={{
+                    textAlign: "left",
+                    border: "1px solid var(--line)",
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    background: "var(--surface)",
+                    color: "var(--text)",
+                    cursor: "pointer"
+                  }}
+                >
+                  <strong style={{ display: "block", fontSize: 12 }}>
+                    <Plus size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                    Add as route point
+                  </strong>
+                  <span style={{ display: "block", color: "var(--muted)", fontSize: 12 }}>
+                    {shortPlaceName(result.display_name)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <p style={{ margin: "8px 2px 0", color: "var(--muted)", fontSize: 12 }}>
+            Search is optional. You can still click the map or drag points manually.
+          </p>
+        </div>
+      ) : null}
+
       <div
         className="route-preview-controls"
         style={{
@@ -768,13 +971,17 @@ export function RoutePreviewMap({
       >
         <span style={{ fontSize: "13px", color: "var(--muted)" }}>
           <strong style={{ color: "var(--text)" }}>{activeRouteName}</strong>
-          {" · "}
+          {" - "}
           {message}
         </span>
 
         <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
           {isEditing ? (
             <>
+              <span style={{ color: "var(--muted)", fontSize: 12 }}>
+                {editPoints.length} points
+              </span>
+
               <button
                 type="button"
                 className="soft-button"
@@ -786,6 +993,7 @@ export function RoutePreviewMap({
                   opacity: selectedPointIndex === null ? 0.5 : 1
                 }}
               >
+                <Trash2 size={14} />
                 Remove point
               </button>
 
@@ -795,6 +1003,7 @@ export function RoutePreviewMap({
                 onClick={() => {
                   setEditPoints([]);
                   setSelectedPointIndex(null);
+                  setSearchResults([]);
                   setMessage("Unsaved route points cleared.");
                 }}
                 style={{ padding: "6px 10px", fontSize: "12px" }}
@@ -806,9 +1015,10 @@ export function RoutePreviewMap({
                 type="button"
                 className="soft-button"
                 onClick={recalculatePath}
-                disabled={isCalculating || editPoints.length < 2}
+                disabled={isCalculating || isSaving || editPoints.length < 2}
                 style={{ padding: "6px 12px", fontSize: "12px" }}
               >
+                <LocateFixed size={14} />
                 {isCalculating ? "Calculating..." : "Recalculate road path"}
               </button>
 
@@ -816,16 +1026,18 @@ export function RoutePreviewMap({
                 type="button"
                 className="soft-button primary-action"
                 onClick={saveEditedPath}
+                disabled={isSaving}
                 style={{
                   padding: "6px 12px",
                   fontSize: "12px",
+                  opacity: isSaving ? 0.65 : 1,
                   background: "#13a46b",
                   color: "#fff",
                   border: "none",
                   borderRadius: "4px"
                 }}
               >
-                Save route path
+                {isSaving ? "Saving..." : "Save route path"}
               </button>
 
               <button
@@ -858,7 +1070,8 @@ export function RoutePreviewMap({
                   disabled={isCalculating}
                   style={{ padding: "6px 12px", fontSize: "12px" }}
                 >
-                  {isCalculating ? "Calculating..." : "Recalculate path"}
+                  <LocateFixed size={14} />
+                  {isCalculating ? "Calculating..." : "Recalculate road path"}
                 </button>
               ) : null}
             </>

@@ -38,6 +38,8 @@ const routePatchSchema = routeConfigSchema.partial().passthrough();
 
 const routePathSchema = z.object({
   waypoints: z.array(waypointSchema).default([]),
+  lineId: z.string().optional(),
+  routeGroup: z.string().optional(),
   distanceKm: z.coerce.number().optional(),
   estimatedDurationMinutes: z.coerce.number().optional(),
   trafficDurationMinutes: z.coerce.number().optional(),
@@ -197,7 +199,7 @@ export const routesController = {
   /**
    * PATCH /api/routes/:id/path
    *
-   * Saves manually edited route waypoints/polyline to Firebase AdminRoutes.
+   * Saves curated or manually edited route waypoints/polyline to Firebase AdminRoutes.
    * This is the path used by Route Config and Live Fleet Map.
    */
   async updateRoutePath(req: Request, res: Response) {
