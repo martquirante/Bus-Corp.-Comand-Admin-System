@@ -234,10 +234,8 @@ export function RouteConfigPage() {
     [allLegacy, selectedLineId, direction]
   );
 
-  const mapRoutes = useMemo(
-    () => (showAllRoutesOnMap ? savedRows : selectedRoute ? [selectedRoute] : []),
-    [showAllRoutesOnMap, savedRows, selectedRoute]
-  );
+  const mapRoutes = showAllRoutesOnMap ? savedRows : selectedRoute ? [selectedRoute] : [];
+  const activeSelectedRouteId = selectedRoute?.id || null;
 
   const activeReferenceUrl =
     selectedRouteExtra?.googleMapReferenceUrl ||
@@ -248,9 +246,9 @@ export function RouteConfigPage() {
     "";
 
   useEffect(() => {
-    if (!selectedRoute) return;
+    if (!activeSelectedRouteId) return;
 
-    const metrics = routeMetrics[selectedRoute.id];
+    const metrics = routeMetrics[activeSelectedRouteId];
     if (!metrics) return;
 
     setForm((current) => {
@@ -272,17 +270,17 @@ export function RouteConfigPage() {
         estimatedDurationMinutes: nextDuration
       };
     });
-  }, [selectedRoute?.id, routeMetrics]);
+  }, [activeSelectedRouteId, routeMetrics]);
 
   useEffect(() => {
-    if (selectedRoute && selectedRouteId !== selectedRoute.id) {
-      setSelectedRouteId(selectedRoute.id);
+    if (activeSelectedRouteId && selectedRouteId !== activeSelectedRouteId) {
+      setSelectedRouteId(activeSelectedRouteId);
     }
 
-    if (!selectedRoute && selectedRouteId) {
+    if (!activeSelectedRouteId && selectedRouteId) {
       setSelectedRouteId(null);
     }
-  }, [selectedRoute?.id, selectedRouteId]);
+  }, [activeSelectedRouteId, selectedRouteId]);
 
   useEffect(() => {
     if (!showEditor) return;
@@ -573,10 +571,20 @@ export function RouteConfigPage() {
   };
 
   const ensureSelectedMainRoute = async () => {
+    const routeSeed = getRouteSeed(selectedLineId, direction);
+
     if (selectedRoute) return selectedRoute;
 
-    const routeSeed = getRouteSeed(selectedLineId, direction);
+    const existing = await api.getRoute(routeSeed.id).catch(() => null);
+    const existingRoute = asRouteExtra(existing?.data || null);
+
+    if (existingRoute && existingRoute.source !== "default") {
+      return existingRoute;
+    }
+
     const created = await api.createRoute({
+      id: routeSeed.id,
+      routeId: routeSeed.id,
       routeName: routeSeed.routeName,
       origin: routeSeed.origin,
       destination: routeSeed.destination,
@@ -615,6 +623,7 @@ export function RouteConfigPage() {
 
     try {
       const routeForPath = await ensureSelectedMainRoute();
+      const routeSeed = getRouteSeed(selectedLineId, direction);
 
       const waypoints = referencePoints.map((point, index) => ({
         id: `ref-${selectedLineId}-${direction}-${index + 1}`,
@@ -630,14 +639,23 @@ export function RouteConfigPage() {
               : ("waypoint" as const),
         lineId: selectedLineId,
         direction,
-        origin: index === 0 ? routeForPath.origin : undefined,
+        origin: index === 0 ? routeSeed.origin : undefined,
         destination:
-          index === referencePoints.length - 1 ? routeForPath.destination : undefined
+          index === referencePoints.length - 1 ? routeSeed.destination : undefined
       }));
       const distanceKm = calculateReferenceDistanceKm(referencePoints);
       const estimatedDurationMinutes = estimateReferenceDurationMinutes(distanceKm);
 
-      await api.updateRoutePath(routeForPath.id, {
+      const saved = await api.updateRoutePath(routeForPath.id, {
+        routeName: routeSeed.routeName,
+        origin: routeSeed.origin,
+        destination: routeSeed.destination,
+        direction,
+        reverseRouteId: routeSeed.reverseRouteId,
+        price: routeSeed.price,
+        baseFare: routeSeed.price,
+        isViceVersa: true,
+        status: "active",
         waypoints,
         ...(distanceKm ? { distanceKm } : {}),
         ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
@@ -648,11 +666,20 @@ export function RouteConfigPage() {
         routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
       });
 
+      console.log("Saved reference route", saved.data.id, waypoints.length);
+
       await routes.refresh();
       setShowAllRoutesOnMap(false);
-      setSelectedRouteId(routeForPath.id);
+      setSelectedRouteId(saved.data.id);
+      setRouteMetrics((current) => ({
+        ...current,
+        [saved.data.id]: {
+          distanceKm,
+          estimatedDurationMinutes
+        }
+      }));
       setMessageIsError(false);
-      setMessage("Reference route path applied. You can still fine-tune it manually.");
+      setMessage(`Reference path saved with ${waypoints.length} waypoints.`);
     } catch {
       setMessageIsError(true);
       setMessage("Could not save route path. Please try again.");
@@ -762,11 +789,23 @@ export function RouteConfigPage() {
                         ? ("destination" as const)
                         : ("waypoint" as const),
                   lineId: selectedLineId,
-                  direction
+                  direction,
+                  origin: index === 0 ? selectedRouteSeed.origin : undefined,
+                  destination:
+                    index === points.length - 1 ? selectedRouteSeed.destination : undefined
                 }));
 
                 try {
                   await api.updateRoutePath(routeId, {
+                    routeName: selectedRouteSeed.routeName,
+                    origin: selectedRouteSeed.origin,
+                    destination: selectedRouteSeed.destination,
+                    direction,
+                    reverseRouteId: selectedRouteSeed.reverseRouteId,
+                    price: selectedRouteSeed.price,
+                    baseFare: selectedRouteSeed.price,
+                    isViceVersa: true,
+                    status: "active",
                     waypoints,
                     distanceKm,
                     ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),

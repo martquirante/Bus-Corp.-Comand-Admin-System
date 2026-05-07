@@ -67,6 +67,15 @@ type RouteWaypointPayload = NonNullable<RouteConfig["waypoints"]>[number] & {
 
 export type RoutePathPayload = {
   waypoints: RouteWaypointPayload[];
+  routeName?: string;
+  origin?: string;
+  destination?: string;
+  direction?: RouteConfig["direction"];
+  reverseRouteId?: string;
+  status?: RouteConfig["status"];
+  price?: number;
+  baseFare?: number;
+  isViceVersa?: boolean;
   // Line metadata is persisted with the path so Route Config and Live Fleet Map
   // can match the saved road path without falling back to legacy fare stops.
   lineId?: string;

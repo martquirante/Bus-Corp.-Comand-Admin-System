@@ -110,6 +110,11 @@ const getRoutePoints = (route: RouteConfig): LatLngPoint[] => {
     .map((point) => [point.lat as number, point.lng as number] as LatLngPoint);
 };
 
+const getPointSignature = (points: LatLngPoint[]) =>
+  points
+    .map(([lat, lng], index) => `${index + 1}:${lat.toFixed(6)},${lng.toFixed(6)}`)
+    .join("|");
+
 const haversineMeters = ([lat1, lng1]: LatLngPoint, [lat2, lng2]: LatLngPoint) => {
   const radius = 6371000;
   const toRad = (value: number) => (value * Math.PI) / 180;
@@ -284,8 +289,14 @@ export function RoutePreviewMap({
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [computedRoads, setComputedRoads] = useState<Record<string, LatLngPoint[]>>({});
+  const [computedRoadBaseSignatures, setComputedRoadBaseSignatures] = useState<
+    Record<string, string>
+  >({});
   const [computedMetrics, setComputedMetrics] = useState<
     Record<string, { distanceKm?: number; estimatedDurationMinutes?: number }>
+  >({});
+  const [computedMetricBaseSignatures, setComputedMetricBaseSignatures] = useState<
+    Record<string, string>
   >({});
   const [viewMode, setViewMode] = useState<"street" | "satellite">("street");
   const [isTrafficOn, setIsTrafficOn] = useState(false);
@@ -306,7 +317,15 @@ export function RoutePreviewMap({
   const visibleRoutes = useMemo(
     () =>
       routes
-        .map((route) => ({ route, points: getRoutePoints(route) }))
+        .map((route) => {
+          const points = getRoutePoints(route);
+
+          return {
+            route,
+            points,
+            signature: getPointSignature(points)
+          };
+        })
         .filter((entry) => entry.points.length > 1 || entry.route.id === selectedRouteId),
     [routes, selectedRouteId]
   );
@@ -348,6 +367,10 @@ export function RoutePreviewMap({
 
       if (isEditing) {
         setEditPoints(result.points);
+        setComputedMetricBaseSignatures((current) => ({
+          ...current,
+          [entry.route.id]: getPointSignature(result.points)
+        }));
         setComputedMetrics((current) => ({
           ...current,
           [entry.route.id]: {
@@ -360,6 +383,14 @@ export function RoutePreviewMap({
         setComputedRoads((current) => ({
           ...current,
           [entry.route.id]: result.points
+        }));
+        setComputedRoadBaseSignatures((current) => ({
+          ...current,
+          [entry.route.id]: entry.signature
+        }));
+        setComputedMetricBaseSignatures((current) => ({
+          ...current,
+          [entry.route.id]: entry.signature
         }));
         setComputedMetrics((current) => ({
           ...current,
@@ -676,7 +707,15 @@ export function RoutePreviewMap({
         ? entry.route.id === selectedRouteId
         : visibleRoutes.length === 1;
       const routeColor = getRouteColor(entry.route);
-      const routePoints = computedRoads[entry.route.id] || entry.points;
+      const previewRoadPoints =
+        computedRoadBaseSignatures[entry.route.id] === entry.signature
+          ? computedRoads[entry.route.id]
+          : undefined;
+      const previewMetrics =
+        computedMetricBaseSignatures[entry.route.id] === entry.signature
+          ? computedMetrics[entry.route.id]
+          : undefined;
+      const routePoints = previewRoadPoints || entry.points;
 
       if (routePoints.length < 2) continue;
       drawnRouteCount += 1;
@@ -721,13 +760,13 @@ export function RoutePreviewMap({
       }
 
       const distanceKm =
-        computedMetrics[entry.route.id]?.distanceKm ??
+        previewMetrics?.distanceKm ??
         entry.route.distanceKm ??
         entry.route.distance ??
         calculateLineDistanceKm(routePoints, map);
 
       const estimatedDurationMinutes =
-        computedMetrics[entry.route.id]?.estimatedDurationMinutes ??
+        previewMetrics?.estimatedDurationMinutes ??
         entryRouteExtra.trafficDurationMinutes ??
         entry.route.estimatedDurationMinutes ??
         estimateTrafficDurationMinutes(distanceKm);
@@ -757,7 +796,9 @@ export function RoutePreviewMap({
     visibleRoutes,
     selectedRouteId,
     computedRoads,
+    computedRoadBaseSignatures,
     computedMetrics,
+    computedMetricBaseSignatures,
     isEditing,
     editPoints,
     selectedPointIndex
@@ -776,10 +817,12 @@ export function RoutePreviewMap({
     let initialPoints: LatLngPoint[] = [];
 
     if (selectedRouteEntry) {
-      initialPoints =
-        computedRoads[selectedRouteEntry.route.id] ||
-        selectedRouteEntry.points ||
-        [];
+      const previewRoadPoints =
+        computedRoadBaseSignatures[selectedRouteEntry.route.id] === selectedRouteEntry.signature
+          ? computedRoads[selectedRouteEntry.route.id]
+          : undefined;
+
+      initialPoints = previewRoadPoints || selectedRouteEntry.points || [];
     }
 
     setEditPoints(initialPoints);
@@ -814,8 +857,13 @@ export function RoutePreviewMap({
     }
 
     const distanceKm = calculateLineDistanceKm(editPoints, mapRef.current);
+    const editSignature = getPointSignature(editPoints);
+    const previewMetrics =
+      computedMetricBaseSignatures[targetRouteId] === editSignature
+        ? computedMetrics[targetRouteId]
+        : undefined;
     const estimatedDurationMinutes =
-      computedMetrics[targetRouteId]?.estimatedDurationMinutes ||
+      previewMetrics?.estimatedDurationMinutes ||
       estimateTrafficDurationMinutes(distanceKm);
 
     setIsSaving(true);
@@ -828,6 +876,10 @@ export function RoutePreviewMap({
         ...current,
         [targetRouteId]: editPoints
       }));
+      setComputedRoadBaseSignatures((current) => ({
+        ...current,
+        [targetRouteId]: selectedRouteEntry?.signature || ""
+      }));
 
       setComputedMetrics((current) => ({
         ...current,
@@ -835,6 +887,10 @@ export function RoutePreviewMap({
           distanceKm,
           estimatedDurationMinutes
         }
+      }));
+      setComputedMetricBaseSignatures((current) => ({
+        ...current,
+        [targetRouteId]: selectedRouteEntry?.signature || ""
       }));
 
       setIsEditing(false);
@@ -994,7 +1050,7 @@ export function RoutePreviewMap({
                 }}
               >
                 <Trash2 size={14} />
-                Remove point
+                Delete point
               </button>
 
               <button

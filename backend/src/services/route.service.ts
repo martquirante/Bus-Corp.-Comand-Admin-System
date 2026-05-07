@@ -280,6 +280,28 @@ const toWaypointArray = (value: unknown): ExtendedWaypoint[] => {
     .sort((a, b) => toNumber(a.sequence) - toNumber(b.sequence));
 };
 
+const toRoutePathWaypoints = (waypoints: ExtendedRouteConfig["waypoints"] = []) =>
+  (waypoints || [])
+    .map((point, index) => {
+      const rawPoint = point as ExtendedWaypoint & {
+        latitude?: number;
+        longitude?: number;
+      };
+      const lat = Number(rawPoint.lat ?? rawPoint.latitude);
+      const lng = Number(rawPoint.lng ?? rawPoint.longitude);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+      return {
+        ...point,
+        id: point.id || `wp-${index + 1}`,
+        lat,
+        lng,
+        sequence: index + 1
+      } as ExtendedWaypoint;
+    })
+    .filter((point): point is ExtendedWaypoint => Boolean(point));
+
 const normalizeLegacyRoutes = (raw: RawRoutes | null, direction: RouteDirection): RouteConfig[] =>
   Object.entries(raw || {})
     .sort(([a], [b]) => a.localeCompare(b))
@@ -423,6 +445,8 @@ const mergeProductionRoutes = (
     if (!mainRouteIds.has(route.id)) return;
 
     const existing = byId.get(route.id);
+    const routeIsAuthoritative =
+      route.source === "admin" || route.source === "supabase";
 
     byId.set(route.id, {
       ...existing,
@@ -439,8 +463,16 @@ const mergeProductionRoutes = (
         route.mapReferenceUrl ||
         existing?.googleMapReferenceUrl ||
         referenceForLineId(route.lineId),
-      waypoints: route.waypoints?.length ? route.waypoints : existing?.waypoints || [],
-      stops: route.stops?.length ? route.stops : existing?.stops || []
+      waypoints: routeIsAuthoritative
+        ? route.waypoints || []
+        : route.waypoints?.length
+          ? route.waypoints
+          : existing?.waypoints || [],
+      stops: routeIsAuthoritative
+        ? route.stops || []
+        : route.stops?.length
+          ? route.stops
+          : existing?.stops || []
     } as ExtendedRouteConfig);
   });
 
@@ -634,7 +666,8 @@ export const routeService = {
     actor = "system"
   ): Promise<RouteConfig> {
     const existingAdmin = await this.getAdminRoutes();
-    const baseId =
+    const requestedId = slugify(String((route as RawRoute).id || (route as RawRoute).routeId || ""));
+    const baseId = requestedId ||
       slugify(route.routeName || `${route.origin}-${route.destination}`) || `route-${Date.now()}`;
     const id = existingAdmin.some((item) => item.id === baseId)
       ? `${baseId}-${Date.now()}`
@@ -755,6 +788,15 @@ export const routeService = {
     id: string,
     patch: {
       waypoints?: ExtendedRouteConfig["waypoints"];
+      routeName?: string;
+      origin?: string;
+      destination?: string;
+      direction?: RouteDirection;
+      reverseRouteId?: string;
+      status?: RouteStatus;
+      price?: number;
+      baseFare?: number;
+      isViceVersa?: boolean;
       lineId?: string;
       routeGroup?: string;
       distanceKm?: number;
@@ -770,6 +812,7 @@ export const routeService = {
     const current = asExtendedRoute(await this.getRouteById(id));
     const lineId = patch.lineId ?? current?.lineId;
     const routeGroup = patch.routeGroup ?? current?.routeGroup ?? routeGroupForLineId(lineId);
+    const replacementWaypoints = toRoutePathWaypoints(patch.waypoints);
 
     const reference =
       patch.googleMapReferenceUrl ||
@@ -781,9 +824,18 @@ export const routeService = {
     const updatedRoute = await this.updateRoute(
       id,
       {
+        routeName: patch.routeName ?? current?.routeName,
+        origin: patch.origin ?? current?.origin ?? "Unknown Origin",
+        destination: patch.destination ?? current?.destination ?? "Unknown Destination",
+        direction: patch.direction ?? current?.direction,
+        reverseRouteId: patch.reverseRouteId ?? current?.reverseRouteId,
+        status: patch.status ?? current?.status,
+        price: patch.price ?? current?.price,
+        baseFare: patch.baseFare ?? current?.baseFare,
+        isViceVersa: patch.isViceVersa ?? current?.isViceVersa,
         lineId,
         routeGroup,
-        waypoints: patch.waypoints ?? current?.waypoints ?? [],
+        waypoints: replacementWaypoints,
         distanceKm: patch.distanceKm ?? current?.distanceKm,
         distance: patch.distanceKm ?? current?.distance,
         estimatedDurationMinutes:

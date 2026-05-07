@@ -38,6 +38,15 @@ const routePatchSchema = routeConfigSchema.partial().passthrough();
 
 const routePathSchema = z.object({
   waypoints: z.array(waypointSchema).default([]),
+  routeName: z.string().optional(),
+  origin: z.string().optional(),
+  destination: z.string().optional(),
+  direction: routeDirectionSchema.optional(),
+  reverseRouteId: z.string().optional(),
+  status: z.enum(["active", "inactive", "archived"]).optional(),
+  price: z.coerce.number().optional(),
+  baseFare: z.coerce.number().optional(),
+  isViceVersa: z.boolean().optional(),
   lineId: z.string().optional(),
   routeGroup: z.string().optional(),
   distanceKm: z.coerce.number().optional(),
