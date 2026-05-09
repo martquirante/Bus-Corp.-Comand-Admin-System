@@ -160,15 +160,10 @@ export interface RouteConfig {
   reverseRouteId?: string;
 
   /**
-   * Google Maps reference link or other map reference.
-   * This is metadata only. It should not automatically overwrite saved waypoints.
+   * Optional non-Google map reference metadata.
+   * This must not overwrite saved waypoints.
    */
   mapReferenceUrl?: string;
-
-  /**
-   * Alias used by some Route Config code.
-   */
-  googleMapReferenceUrl?: string;
 
   assignedBusId?: string;
   assignedTripScheduleId?: string;
@@ -192,7 +187,14 @@ export interface RouteConfig {
   /**
    * Optional raw provider/source info for route geometry.
    */
-  routeGeometrySource?: "manual" | "google-routes" | "osrm" | "openrouteservice" | "supabase" | "firebase" | string;
+  routeGeometrySource?: "manual" | "osrm" | "openrouteservice" | "supabase" | "firebase" | string;
+
+  /**
+   * Main route line was explicitly planned and saved by an admin user.
+   * Old seeded/reference routes should not appear as live Route Config lines
+   * unless this flag or a road-snapped geometry source is present.
+   */
+  plannedByAdmin?: boolean;
 
   /**
    * Tells the UI/backend where this normalized record came from.

@@ -1,20 +1,36 @@
+# Dependencies
 node_modules/
+
+# Next / build outputs
 .next/
+frontend/.next/
 dist/
 build/
 coverage/
+out/
+
+# Environment files
 .env
 .env.local
 .env.*.local
 backend/.env
 frontend/.env.local
+
+# Secrets
 *.pem
 serviceAccountKey.json
+
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
-*.tsbuildinfo
 frontend/dev.*.log
 backend/dev.*.log
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Local dev/browser test profiles
+.dev-logs/

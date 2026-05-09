@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FleetBus, RouteConfig } from "@pos-bus/shared";
 import {
   LocateFixed,
@@ -11,10 +11,10 @@ import {
   Navigation,
   Route as RouteIcon,
   Satellite,
-  Search,
-  TrafficCone
+  Search
 } from "lucide-react";
 import { getMainRouteLineId, normalizeMainRouteLineId } from "@/utils/routeLines";
+import { MAIN_TERMINALS, TERMINAL_ICON_ASSET } from "@/utils/terminals";
 
 type LeafletApi = any;
 type LeafletMap = any;
@@ -33,44 +33,7 @@ const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
 const DEFAULT_CENTER: [number, number] = [14.8078, 121.0111];
 const STOPPED_BUS_ASSET = "/assets/bus/blue-aircon/bus-blue-aircon-front-left.png";
 const MOVING_BUS_ASSET = "/assets/bus/blue-aircon/map-only-blue-bus.png";
-
-const TERMINALS = [
-  {
-    id: "fvr-hq",
-    name: "FVR Terminal HQ",
-    address: "V25X+F5P, Balasing - San Jose Rd, Norzagaray, Bulacan",
-    position: [14.8078, 121.0111] as [number, number],
-    kind: "hq"
-  },
-  {
-    id: "gma",
-    name: "GMA Kamuning Terminal",
-    address: "J2QR+FP Quezon City, Metro Manila",
-    position: [14.6387, 121.0418] as [number, number],
-    kind: "gma"
-  },
-  {
-    id: "st-cruz",
-    name: "ST.CRUZ Terminal",
-    address: "JX3J+XP Manila, Metro Manila",
-    position: [14.6049, 120.9818] as [number, number],
-    kind: "stcruz"
-  },
-  {
-    id: "muzon",
-    name: "Muzon Terminal",
-    address: "San Jose del Monte-Marilao Road, SJDM, Bulacan",
-    position: [14.8137, 121.0377] as [number, number],
-    kind: "muzon"
-  },
-  {
-    id: "pitx",
-    name: "PITX Terminal",
-    address: "PITX, Paranaque Integrated Terminal Exchange",
-    position: [14.5094, 120.9916] as [number, number],
-    kind: "pitx"
-  }
-] as const;
+const ADMIN_MAP_ICON_ASSET = "/assets/icons/admin-map-icon.png";
 
 const ensureLeaflet = () => {
   if (typeof window === "undefined") return Promise.reject(new Error("Map unavailable during server render."));
@@ -138,10 +101,10 @@ const popupHtml = (bus: FleetBus) => `
   </div>
 `;
 
-const terminalPopupHtml = (terminal: (typeof TERMINALS)[number]) => `
+const terminalPopupHtml = (terminal: (typeof MAIN_TERMINALS)[number]) => `
   <div class="leaflet-command-popup">
     <strong>${terminal.name}</strong>
-    <span>Terminal / bus stop reference</span>
+    <span>${terminal.plusCode}</span>
     <p>${terminal.address}</p>
   </div>
 `;
@@ -160,17 +123,6 @@ type RouteExtraFields = RouteConfig & {
   routeGroup?: string;
 };
 
-const normalizeMatchText = (value?: string | number | null) =>
-  String(value || "")
-    .toLowerCase()
-    .replace(/pitix/g, "pitx")
-    .replace(/st\.?\s*cruz/g, "st cruz")
-    .replace(/sta\.?\s*cruz/g, "st cruz")
-    .replace(/santa\s+cruz/g, "st cruz")
-    .replace(/[_>-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
 const asFleetRouteLineId = (value?: string | number | null): FleetRouteLineId | null => {
   const normalized = normalizeMainRouteLineId(value);
   return normalized === "fvr-pitx" || normalized === "fvr-stcruz" ? normalized : null;
@@ -185,41 +137,6 @@ const getRouteLineIdForMap = (route: RouteConfig): FleetRouteLineId | null => {
   return inferred === "fvr-pitx" || inferred === "fvr-stcruz" ? inferred : null;
 };
 
-const getBusLineId = (bus: FleetBus): FleetRouteLineId | null =>
-  asFleetRouteLineId(bus.lineId || bus.route || bus.assignedRouteId || "");
-
-const firstTerminalIndex = (text: string, terminals: string[]) =>
-  terminals.reduce((best, terminal) => {
-    const index = text.indexOf(terminal);
-    if (index === -1) return best;
-    return best === -1 ? index : Math.min(best, index);
-  }, -1);
-
-const getBusDirection = (bus: FleetBus): RouteConfig["direction"] | null => {
-  const text = normalizeMatchText(`${bus.route || ""} ${bus.assignedRouteId || ""}`);
-
-  if (!text) return null;
-  if (text.includes("reverse")) return "reverse";
-  if (text.includes("forward")) return "forward";
-
-  const fvrIndex = text.indexOf("fvr");
-  const terminalIndex = firstTerminalIndex(text, ["pitx", "st cruz", "stcruz"]);
-
-  if (fvrIndex === -1 || terminalIndex === -1) return null;
-  return fvrIndex < terminalIndex ? "forward" : "reverse";
-};
-
-const routeMatchesBus = (route: RouteConfig, bus: FleetBus) => {
-  if (bus.assignedRouteId && route.id === bus.assignedRouteId) return true;
-
-  const routeLineId = getRouteLineIdForMap(route);
-  const busLineId = getBusLineId(bus);
-  if (!routeLineId || !busLineId || routeLineId !== busLineId) return false;
-
-  const busDirection = getBusDirection(bus);
-  return !busDirection || route.direction === busDirection;
-};
-
 export function FleetMap({
   buses,
   routes = [],
@@ -230,55 +147,32 @@ export function FleetMap({
   focusBus?: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const leafletRef = useRef<LeafletApi | null>(null);
   const streetLayerRef = useRef<LeafletLayer | null>(null);
   const satelliteLayerRef = useRef<LeafletLayer | null>(null);
-  const trafficLayerRef = useRef<LeafletLayer | null>(null);
   const routeLayerRef = useRef<LeafletLayer | null>(null);
   const markerRefs = useRef<globalThis.Map<string, LeafletMarker>>(new globalThis.Map());
   const searchMarkerRef = useRef<LeafletMarker | null>(null);
+  const adminLocationMarkerRef = useRef<LeafletMarker | null>(null);
+  const requestedAdminLocationRef = useRef(false);
   const followedBusIdRef = useRef<string | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [busQuery, setBusQuery] = useState("");
-  const [isTrafficOn, setIsTrafficOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [adminLocationStatus, setAdminLocationStatus] = useState<
+    "idle" | "locating" | "ready" | "denied" | "unsupported"
+  >("idle");
   const [followedBusId, setFollowedBusId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"street" | "satellite">("street");
 
   const mapBuses = useMemo(() => buses.filter((bus) => hasAssignedRoute(bus) && hasValidGps(bus)), [buses]);
   const hasGps = mapBuses.length > 0;
-  const selectedRouteBus = useMemo(() => {
-    if (followedBusId) {
-      return mapBuses.find((bus) => bus.id === followedBusId) || null;
-    }
-
-    if (focusBus) {
-      const needle = focusBus.toLowerCase();
-      return (
-        mapBuses.find((bus) =>
-          [bus.id, bus.busNumber, bus.driver, bus.conductor]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(needle))
-        ) || null
-      );
-    }
-
-    return null;
-  }, [focusBus, followedBusId, mapBuses]);
   const routesWithWaypoints = useMemo(
     () => {
-      const activeRouteKeys = new Set<string>();
-
-      mapBuses.forEach((bus) => {
-        const lineId = getBusLineId(bus);
-        if (!lineId) return;
-
-        const busDirection = getBusDirection(bus);
-        activeRouteKeys.add(`${lineId}:${busDirection || "any"}`);
-      });
-
       return routes
         .map((route) => ({
           ...route,
@@ -287,22 +181,90 @@ export function FleetMap({
             .map((point) => [point.lat as number, point.lng as number] as [number, number])
         }))
         .filter((route) => route.points.length > 1)
-        .filter((route) => {
-          if (selectedRouteBus) return routeMatchesBus(route, selectedRouteBus);
-
-          const lineId = getRouteLineIdForMap(route);
-          if (!lineId) return false;
-
-          if (!activeRouteKeys.size) return true;
-
-          return (
-            activeRouteKeys.has(`${lineId}:${route.direction}`) ||
-            activeRouteKeys.has(`${lineId}:any`)
-          );
-        });
+        .filter((route) => (route.status || "active") === "active")
+        .filter((route) => Boolean(getRouteLineIdForMap(route)));
     },
-    [mapBuses, routes, selectedRouteBus]
+    [routes]
   );
+
+  const setAdminLocationMarker = useCallback((point: [number, number], accuracy?: number, shouldFly = true) => {
+    const L = leafletRef.current;
+    const map = mapRef.current;
+    if (!L || !map) return;
+
+    const accuracyText = accuracy ? `<span>Accuracy ${Math.round(accuracy)}m</span>` : "";
+    const popup = `
+      <div class="leaflet-command-popup">
+        <strong>Admin device location</strong>
+        ${accuracyText}
+        <p>Location access is active for map orientation.</p>
+      </div>
+    `;
+    const icon = L.divIcon({
+      className: "admin-location-icon-shell",
+      html: `
+        <div class="admin-location-marker">
+          <img src="${ADMIN_MAP_ICON_ASSET}" alt="" />
+          <strong>Admin</strong>
+        </div>
+      `,
+      iconSize: [72, 80],
+      iconAnchor: [36, 68],
+      popupAnchor: [0, -58]
+    });
+
+    if (adminLocationMarkerRef.current) {
+      adminLocationMarkerRef.current.setLatLng(point);
+      adminLocationMarkerRef.current.setIcon(icon);
+      adminLocationMarkerRef.current.setPopupContent(popup);
+    } else {
+      adminLocationMarkerRef.current = L.marker(point, { icon })
+        .addTo(map)
+        .bindPopup(popup);
+    }
+
+    if (shouldFly) {
+      followedBusIdRef.current = null;
+      setFollowedBusId(null);
+      map.flyTo(point, 16, { animate: true, duration: 0.8 });
+      adminLocationMarkerRef.current.openPopup();
+    }
+  }, []);
+
+  const requestAdminLocation = useCallback((shouldFly = true) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setAdminLocationStatus("unsupported");
+      setMapError("Device location is not supported in this browser.");
+      return;
+    }
+
+    setAdminLocationStatus("locating");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const point: [number, number] = [
+          position.coords.latitude,
+          position.coords.longitude
+        ];
+
+        setAdminLocationStatus("ready");
+        setAdminLocationMarker(point, position.coords.accuracy, shouldFly);
+      },
+      (error) => {
+        setAdminLocationStatus(error.code === error.PERMISSION_DENIED ? "denied" : "idle");
+        setMapError(
+          error.code === error.PERMISSION_DENIED
+            ? "Location permission was denied. Use the Admin location button to try again."
+            : "Could not read device location right now."
+        );
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 15000,
+        timeout: 12000
+      }
+    );
+  }, [setAdminLocationMarker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -329,23 +291,9 @@ export function FleetMap({
             maxZoom: 19
           }
         );
-        trafficLayerRef.current = L.tileLayer("https://mt0.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}", {
-          attribution: "Traffic Data (c) Google",
-          maxZoom: 20
-        });
-
-        L.marker(DEFAULT_CENTER, {
-          icon: L.divIcon({
-            className: "leaflet-hq-marker",
-            html: "<span>HQ</span>",
-            iconSize: [44, 44],
-            iconAnchor: [22, 22]
-          })
-        })
-          .addTo(map)
-          .bindPopup("<strong>COMMAND CENTER (HQ)</strong><br/>Operational Headquarters<br/>Fleet Management Base");
 
         mapRef.current = map;
+        setIsMapReady(true);
       })
       .catch((error) => setMapError(error instanceof Error ? error.message : "Map failed to load."));
 
@@ -359,12 +307,48 @@ export function FleetMap({
   }, [followedBusId]);
 
   useEffect(() => {
+    if (!isMapReady || requestedAdminLocationRef.current) return;
+
+    requestedAdminLocationRef.current = true;
+    requestAdminLocation(false);
+  }, [isMapReady, requestAdminLocation]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === shellRef.current);
+      window.setTimeout(() => mapRef.current?.invalidateSize({ animate: true }), 120);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
     const timer = window.setTimeout(() => map.invalidateSize({ animate: true }), 120);
     return () => window.clearTimeout(timer);
   }, [isFullscreen]);
+
+  const toggleFleetFullscreen = async () => {
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      } else {
+        await shell.requestFullscreen();
+        setIsFullscreen(true);
+      }
+    } catch {
+      setIsFullscreen((current) => !current);
+    } finally {
+      window.setTimeout(() => mapRef.current?.invalidateSize({ animate: true }), 160);
+    }
+  };
 
   useEffect(() => {
     const L = leafletRef.current;
@@ -458,10 +442,11 @@ export function FleetMap({
     const group = L.layerGroup().addTo(map);
     routeLayerRef.current = group;
 
+    const routeBounds: [number, number][] = [];
+
     routesWithWaypoints.forEach((route) => {
-      const isPitx = getRouteLineIdForMap(route) === "fvr-pitx";
       L.polyline(route.points, {
-        color: isPitx ? "#13a46b" : "#0f7ad3",
+        color: "#0f7ad3",
         weight: 6,
         opacity: 0.78,
         lineCap: "round"
@@ -470,16 +455,18 @@ export function FleetMap({
         .bindPopup(
           `<strong>${route.routeName || `${route.origin} to ${route.destination}`}</strong><br/>${route.points.length} AdminRoutes waypoints`
         );
+
+      route.points.forEach((point) => routeBounds.push(point));
     });
 
-    TERMINALS.forEach((terminal) => {
+    MAIN_TERMINALS.forEach((terminal) => {
       L.marker(terminal.position, {
         icon: L.divIcon({
           className: "leaflet-terminal-icon-shell",
           html: `
-            <div class="leaflet-terminal-marker terminal-${terminal.kind}">
-              <img src="/assets/Terminal/3D_terminal.png" alt="" />
-              <strong>${terminal.name.replace(" Terminal", "")}</strong>
+            <div class="leaflet-terminal-marker terminal-${terminal.id}">
+              <img src="${TERMINAL_ICON_ASSET}" alt="" />
+              <strong>${terminal.label}</strong>
             </div>
           `,
           iconSize: [82, 78],
@@ -489,23 +476,15 @@ export function FleetMap({
       })
         .addTo(group)
         .bindPopup(terminalPopupHtml(terminal));
+
+      routeBounds.push(terminal.position);
     });
 
-  }, [routesWithWaypoints]);
-
-  const toggleTraffic = () => {
-    const map = mapRef.current;
-    const traffic = trafficLayerRef.current;
-    if (!map || !traffic) return;
-
-    if (isTrafficOn) {
-      map.removeLayer(traffic);
-      setIsTrafficOn(false);
-    } else {
-      traffic.addTo(map);
-      setIsTrafficOn(true);
+    if (!mapBuses.length && routeBounds.length) {
+      map.fitBounds(routeBounds, { padding: [60, 60], maxZoom: 12 });
     }
-  };
+
+  }, [mapBuses.length, routesWithWaypoints]);
 
   const toggleView = (mode: "street" | "satellite") => {
     const map = mapRef.current;
@@ -573,23 +552,35 @@ export function FleetMap({
   };
 
   return (
-    <section className={`fleet-map real-fleet-map ${isFullscreen ? "is-fullscreen" : ""}`}>
+    <section ref={shellRef} className={`fleet-map real-fleet-map ${isFullscreen ? "is-fullscreen" : ""}`}>
       <div ref={containerRef} className="leaflet-map-canvas" />
 
       <div className="legacy-map-header">
-        <div>
-          <strong>Operations Map</strong>
-          <span>Realtime bus tracking from Firebase RTDB</span>
+        <div className="legacy-map-title">
+          <span className="admin-map-header-icon" aria-hidden="true" />
+          <div>
+            <strong>Live Fleet Map</strong>
+            <span>
+              {adminLocationStatus === "ready"
+                ? "Admin device location active"
+                : "Realtime bus tracking and route monitoring"}
+            </span>
+          </div>
         </div>
         <div className="legacy-map-actions">
+          <button
+            type="button"
+            className={adminLocationStatus === "ready" ? "active" : ""}
+            onClick={() => requestAdminLocation(true)}
+          >
+            <span className="admin-map-button-icon" aria-hidden="true" />
+            {adminLocationStatus === "locating" ? "Locating..." : "Admin location"}
+          </button>
           <button type="button" className={viewMode === "satellite" ? "active" : ""} onClick={() => toggleView("satellite")}>
             <Satellite size={16} /> Satellite
           </button>
           <button type="button" className={viewMode === "street" ? "active" : ""} onClick={() => toggleView("street")}>
             <MapIcon size={16} /> Street
-          </button>
-          <button type="button" className={isTrafficOn ? "active traffic" : "traffic"} onClick={toggleTraffic}>
-            <TrafficCone size={16} /> Traffic
           </button>
           <button type="button" onClick={centerFleet}>
             <LocateFixed size={16} /> Center
@@ -602,9 +593,9 @@ export function FleetMap({
             <Navigation size={16} /> Following {mapBuses.find((bus) => bus.id === followedBusId)?.busNumber || "bus"}
             </button>
           ) : null}
-          <button type="button" onClick={() => setIsFullscreen((current) => !current)}>
+          <button type="button" onClick={toggleFleetFullscreen}>
             {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            {isFullscreen ? "Back to page" : "Fullscreen"}
+            {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           </button>
         </div>
       </div>
@@ -662,10 +653,16 @@ export function FleetMap({
 
       <div className="map-legend">
         <span>
-          <i className="legend-online" /> Active
+          <i className="legend-main-route" /> Main route
         </span>
         <span>
-          <i className="legend-idle" /> Offline
+          <i className="legend-terminal" /> Terminal
+        </span>
+        <span>
+          <i className="legend-online" /> Online bus
+        </span>
+        <span>
+          <i className="legend-idle" /> Offline bus
         </span>
         <span>
           <i className="legend-sos" /> SOS

@@ -18,13 +18,12 @@ import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
 import { DataTable } from "@/components/ui/DataTable";
-import { RoutePreviewMap } from "@/components/map/RoutePreviewMap";
+import { RoutePreviewMap, type LatLngPoint } from "@/components/map/RoutePreviewMap";
 import { formatNumber } from "@/utils/format";
+import { MAIN_TERMINALS } from "@/utils/terminals";
 import {
-  ROUTE_GOOGLE_MAP_REFS,
   filterFareStopsBySelectedLineAndDirection,
   getFareStopLineId,
-  getGoogleMapReferenceForLine,
   getPrimaryRouteForLine,
   getRouteDisplayName,
   getRouteLineLabel,
@@ -33,27 +32,21 @@ import {
   isDefaultRoutePlaceholder,
   normalizeRouteLabel
 } from "@/utils/routeLines";
-import {
-  REFERENCE_GOOGLE_MAP_LINKS,
-  getReferenceRoutePoints
-} from "@/utils/referenceRouteWaypoints";
 
 type MainRouteLineId = "fvr-pitx" | "fvr-stcruz";
 
 type RouteExtraFields = RouteConfig & {
   lineId?: string;
   routeGroup?: string;
-  googleMapReferenceUrl?: string;
+  plannedByAdmin?: boolean;
   source?: "legacy" | "admin" | "default" | "supabase" | string;
   legacyKey?: string;
-  legacyPath?: string;
 };
 
 type RoutePayload = Partial<RouteConfig> &
   Record<string, unknown> & {
     lineId?: string;
     routeGroup?: string;
-    googleMapReferenceUrl?: string;
   };
 
 const asRouteExtra = (route?: RouteConfig | null): RouteExtraFields | null =>
@@ -84,45 +77,103 @@ const emptyForm = {
   price: "",
   distanceKm: "",
   estimatedDurationMinutes: "",
-  baseFare: "",
-  mapReferenceUrl: ""
+  baseFare: ""
 };
 
 const toWholePesoValue = (value: string | number | null | undefined) =>
   Math.round(Number(value) || 0);
 
-const calculateReferenceDistanceKm = (
-  points: Array<{ lat: number; lng: number }>
-) => {
-  if (points.length < 2) return undefined;
+const getRoutePolylinePoints = (route?: RouteConfig | null): LatLngPoint[] =>
+  (route?.waypoints || [])
+    .filter(
+      (point) =>
+        typeof point.lat === "number" &&
+        typeof point.lng === "number" &&
+        Number.isFinite(point.lat) &&
+        Number.isFinite(point.lng)
+    )
+    .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0))
+    .map((point) => [point.lat as number, point.lng as number] as LatLngPoint);
 
-  const radius = 6371;
+const distanceBetweenMeters = ([lat1, lng1]: LatLngPoint, [lat2, lng2]: LatLngPoint) => {
+  const radius = 6371000;
   const toRad = (value: number) => (value * Math.PI) / 180;
-  let totalKm = 0;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
 
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    const dLat = toRad(next.lat - current.lat);
-    const dLng = toRad(next.lng - current.lng);
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(current.lat)) *
-        Math.cos(toRad(next.lat)) *
-        Math.sin(dLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
-    totalKm += radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+const pointIsOnMainRoute = (point: LatLngPoint, mainRoutePoints: LatLngPoint[]) =>
+  mainRoutePoints.some((routePoint) => distanceBetweenMeters(point, routePoint) <= 5);
+
+const getRouteAnchorPoints = (route?: RouteConfig | null): LatLngPoint[] => {
+  const points = getRoutePolylinePoints(route);
+
+  if (points.length < 2) return [];
+  return [points[0], points[points.length - 1]];
+};
+
+const terminalPointForLabel = (label?: string | null): LatLngPoint | null => {
+  const normalized = normalizeRouteLabel(label).toUpperCase();
+
+  if (normalized.includes("FVR")) return MAIN_TERMINALS.find((terminal) => terminal.id === "fvr")?.position || null;
+  if (normalized.includes("MUZON")) return MAIN_TERMINALS.find((terminal) => terminal.id === "muzon")?.position || null;
+  if (normalized.includes("ST. CRUZ") || normalized.includes("ST CRUZ")) {
+    return MAIN_TERMINALS.find((terminal) => terminal.id === "st-cruz")?.position || null;
+  }
+  if (normalized.includes("GMA")) return MAIN_TERMINALS.find((terminal) => terminal.id === "gma")?.position || null;
+  if (normalized.includes("PITX") || normalized.includes("PITIX")) {
+    return MAIN_TERMINALS.find((terminal) => terminal.id === "pitx")?.position || null;
   }
 
-  return Number(totalKm.toFixed(1));
+  return null;
 };
 
-const estimateReferenceDurationMinutes = (distanceKm?: number) => {
-  if (!distanceKm) return undefined;
+const buildRouteWaypoints = (
+  points: LatLngPoint[],
+  lineId: MainRouteLineId,
+  direction: RouteConfig["direction"],
+  seed: { origin: string; destination: string }
+) =>
+  points.map((point, index) => ({
+    id: `wp-${Date.now()}-${index}`,
+    lat: point[0],
+    lng: point[1],
+    sequence: index + 1,
+    type:
+      index === 0
+        ? ("origin" as const)
+        : index === points.length - 1
+          ? ("destination" as const)
+          : ("waypoint" as const),
+    lineId,
+    direction,
+    origin: index === 0 ? seed.origin : undefined,
+    destination: index === points.length - 1 ? seed.destination : undefined
+  }));
 
-  const averageKph = distanceKm > 40 ? 28 : 22;
-  return Math.max(1, Math.round((distanceKm / averageKph) * 60 * 1.25));
-};
+const buildFareStopWaypoints = (
+  points: LatLngPoint[],
+  selectedLineId: MainRouteLineId,
+  direction: RouteConfig["direction"],
+  origin: string,
+  destination: string
+) =>
+  points.slice(0, 2).map((point, index) => ({
+    id: `fare-${Date.now()}-${index}`,
+    lat: point[0],
+    lng: point[1],
+    sequence: index + 1,
+    type: index === 0 ? ("origin" as const) : ("destination" as const),
+    lineId: selectedLineId,
+    direction,
+    origin,
+    destination
+  }));
 
 const getRouteSeed = (
   selectedLineId: MainRouteLineId,
@@ -138,8 +189,7 @@ const getRouteSeed = (
           reverseRouteId: "pitx-to-fvr-via-gma",
           price: 170,
           lineId: "fvr-pitx",
-          routeGroup: "FVR_PITX",
-          mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-pitx"]
+          routeGroup: "FVR_PITX"
         }
       : {
           id: "pitx-to-fvr-via-gma",
@@ -149,8 +199,7 @@ const getRouteSeed = (
           reverseRouteId: "fvr-to-pitx-via-gma",
           price: 170,
           lineId: "fvr-pitx",
-          routeGroup: "FVR_PITX",
-          mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-pitx"]
+          routeGroup: "FVR_PITX"
         };
   }
 
@@ -163,8 +212,7 @@ const getRouteSeed = (
         reverseRouteId: "st-cruz-to-fvr",
         price: 100,
         lineId: "fvr-stcruz",
-        routeGroup: "FVR_ST_CRUZ",
-        mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-stcruz"]
+        routeGroup: "FVR_ST_CRUZ"
       }
     : {
         id: "st-cruz-to-fvr",
@@ -174,8 +222,7 @@ const getRouteSeed = (
         reverseRouteId: "fvr-to-st-cruz",
         price: 100,
         lineId: "fvr-stcruz",
-        routeGroup: "FVR_ST_CRUZ",
-        mapReferenceUrl: REFERENCE_GOOGLE_MAP_LINKS["fvr-stcruz"]
+        routeGroup: "FVR_ST_CRUZ"
       };
 };
 
@@ -188,6 +235,7 @@ export function RouteConfigPage() {
   const [showEditor, setShowEditor] = useState(false);
   const [showAllRoutesOnMap, setShowAllRoutesOnMap] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [fareStopDraftPoints, setFareStopDraftPoints] = useState<LatLngPoint[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [messageIsError, setMessageIsError] = useState(false);
   const [routeMetrics, setRouteMetrics] = useState<
@@ -195,10 +243,8 @@ export function RouteConfigPage() {
   >({});
   const [deleteConfirmRow, setDeleteConfirmRow] = useState<RouteConfig | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isApplyingReference, setIsApplyingReference] = useState(false);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const referenceMessageTimerRef = useRef<number | null>(null);
 
   const loadRoutes = useCallback(() => api.routes(), []);
   const loadLegacyForward = useCallback(() => api.getLegacyRoutesForward(), []);
@@ -222,7 +268,6 @@ export function RouteConfigPage() {
 
   const selectedRoute = getPrimaryRouteForLine(selectedLine, direction);
   const selectedRouteSeed = getRouteSeed(selectedLineId, direction);
-  const selectedRouteExtra = asRouteExtra(selectedRoute);
   const editingExtra = asRouteExtra(editing);
 
   const allLegacy = useMemo(
@@ -237,14 +282,12 @@ export function RouteConfigPage() {
 
   const mapRoutes = showAllRoutesOnMap ? savedRows : selectedRoute ? [selectedRoute] : [];
   const activeSelectedRouteId = selectedRoute?.id || null;
-
-  const activeReferenceUrl =
-    selectedRouteExtra?.googleMapReferenceUrl ||
-    selectedRoute?.mapReferenceUrl ||
-    getGoogleMapReferenceForLine(selectedLineId) ||
-    ROUTE_GOOGLE_MAP_REFS[selectedLineId] ||
-    REFERENCE_GOOGLE_MAP_LINKS[selectedLineId] ||
-    "";
+  const routeSeedControlPoints = [
+    terminalPointForLabel(selectedRouteSeed.origin),
+    terminalPointForLabel(selectedRouteSeed.destination)
+  ].filter((point): point is LatLngPoint => Boolean(point));
+  const isFareStopEditor = showEditor && editingExtra?.source !== "admin";
+  const activeFareStopMapId = isFareStopEditor ? editing?.id || "draft-fare-stop" : null;
 
   useEffect(() => {
     if (!activeSelectedRouteId) return;
@@ -294,15 +337,6 @@ export function RouteConfigPage() {
     }, 80);
   }, [showEditor, editing?.id]);
 
-  useEffect(
-    () => () => {
-      if (referenceMessageTimerRef.current !== null) {
-        window.clearTimeout(referenceMessageTimerRef.current);
-      }
-    },
-    []
-  );
-
   const handleRouteMetrics = useCallback(
     (
       routeId: string,
@@ -334,6 +368,31 @@ export function RouteConfigPage() {
     []
   );
 
+  const handleFareStopMetrics = useCallback(
+    (metrics: { distanceKm?: number; estimatedDurationMinutes?: number }) => {
+      setForm((current) => {
+        const nextDistance = metrics.distanceKm ? String(metrics.distanceKm) : current.distanceKm;
+        const nextDuration = metrics.estimatedDurationMinutes
+          ? String(metrics.estimatedDurationMinutes)
+          : current.estimatedDurationMinutes;
+
+        if (
+          current.distanceKm === nextDistance &&
+          current.estimatedDurationMinutes === nextDuration
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          distanceKm: nextDistance,
+          estimatedDurationMinutes: nextDuration
+        };
+      });
+    },
+    []
+  );
+
   const refreshAllRoutes = async () => {
     await routes.refresh();
     await legacyForward.refresh();
@@ -345,6 +404,7 @@ export function RouteConfigPage() {
     setShowEditor(false);
     setEditing(null);
     setForm(emptyForm);
+    setFareStopDraftPoints([]);
     setMessage(null);
     setDeleteConfirmRow(null);
 
@@ -365,23 +425,18 @@ export function RouteConfigPage() {
       setShowEditor(false);
       setEditing(null);
       setForm(emptyForm);
+      setFareStopDraftPoints([]);
       setMessage(null);
     }
   };
 
   const openEditorForFareStop = (route: RouteConfig) => {
-    const routeExtra = asRouteExtra(route);
     const detectedLineId = getFareStopLineId(route);
     const nextLineId: MainRouteLineId =
       detectedLineId === "fvr-pitx" || detectedLineId === "fvr-stcruz"
         ? detectedLineId
         : selectedLineId;
 
-    const routeRef =
-      routeExtra?.googleMapReferenceUrl ||
-      route.mapReferenceUrl ||
-      getGoogleMapReferenceForLine(nextLineId) ||
-      REFERENCE_GOOGLE_MAP_LINKS[nextLineId];
     const line = routeLines.find((item) => item.id === nextLineId);
     const mainRouteForFareStop = line ? getPrimaryRouteForLine(line, route.direction) : null;
 
@@ -404,19 +459,12 @@ export function RouteConfigPage() {
         : "",
       baseFare: route.baseFare
         ? String(toWholePesoValue(route.baseFare))
-        : String(toWholePesoValue(route.price)),
-      mapReferenceUrl: routeRef || ""
+        : String(toWholePesoValue(route.price))
     });
+    setFareStopDraftPoints(getRouteAnchorPoints(route));
   };
 
   const openEditorForAdminRoute = (route: RouteConfig) => {
-    const routeExtra = asRouteExtra(route);
-    const routeRef =
-      routeExtra?.googleMapReferenceUrl ||
-      route.mapReferenceUrl ||
-      getGoogleMapReferenceForLine(selectedLineId) ||
-      REFERENCE_GOOGLE_MAP_LINKS[selectedLineId];
-
     setEditing(route);
     setSelectedRouteId(route.id);
     setDirection(route.direction);
@@ -435,9 +483,9 @@ export function RouteConfigPage() {
         : "",
       baseFare: route.baseFare
         ? String(toWholePesoValue(route.baseFare))
-        : String(toWholePesoValue(route.price)),
-      mapReferenceUrl: routeRef || ""
+        : String(toWholePesoValue(route.price))
     });
+    setFareStopDraftPoints([]);
   };
 
   const openCreateFareStop = () => {
@@ -458,14 +506,15 @@ export function RouteConfigPage() {
           : selectedLineId === "fvr-pitx"
             ? "PITX"
             : "ST. CRUZ",
-      destination: direction === "forward" ? "" : "FVR",
-      mapReferenceUrl: activeReferenceUrl
+      destination: direction === "forward" ? "" : "FVR"
     });
+    setFareStopDraftPoints([]);
   };
 
   const closeEditor = () => {
     setEditing(null);
     setForm(emptyForm);
+    setFareStopDraftPoints([]);
     setShowEditor(false);
     setMessage(null);
   };
@@ -505,6 +554,46 @@ export function RouteConfigPage() {
     setMessage(null);
     setMessageIsError(false);
 
+    const normalizedOrigin = normalizeRouteLabel(form.origin);
+    const normalizedDestination = normalizeRouteLabel(form.destination);
+    const isFareStopSave = editingExtra?.source !== "admin";
+
+    if (isFareStopSave && selectedRoute && fareStopDraftPoints.length < 2) {
+      setMessageIsError(true);
+      setMessage("Map point A and B on the blue main route before saving this fare stop.");
+      return;
+    }
+
+    if (isFareStopSave && !selectedRoute) {
+      setMessageIsError(true);
+      setMessage("Map the main route line first before assigning fare stop segments.");
+      return;
+    }
+
+    if (isFareStopSave && selectedRoute) {
+      const mainRoutePoints = getRoutePolylinePoints(selectedRoute);
+      const allPointsFollowMainRoute = fareStopDraftPoints
+        .slice(0, 2)
+        .every((point) => pointIsOnMainRoute(point, mainRoutePoints));
+
+      if (!allPointsFollowMainRoute) {
+        setMessageIsError(true);
+        setMessage("Fare stop A and B must be snapped to the blue main route before saving.");
+        return;
+      }
+    }
+
+    const fareStopWaypoints =
+      isFareStopSave && fareStopDraftPoints.length >= 2
+        ? buildFareStopWaypoints(
+            fareStopDraftPoints,
+            selectedLineId,
+            direction,
+            normalizedOrigin,
+            normalizedDestination
+          )
+        : undefined;
+
     const payload: RoutePayload = {
       direction,
       lineId: selectedLineId,
@@ -513,8 +602,8 @@ export function RouteConfigPage() {
         editingExtra?.source === "admin"
           ? editing?.routeName || selectedLine?.label || `${form.origin} to ${form.destination}`
           : `${form.origin} to ${form.destination}`,
-      origin: normalizeRouteLabel(form.origin),
-      destination: normalizeRouteLabel(form.destination),
+      origin: normalizedOrigin,
+      destination: normalizedDestination,
       price: toWholePesoValue(form.price),
       baseFare: toWholePesoValue(form.baseFare || form.price),
       distanceKm: form.distanceKm ? Number(form.distanceKm) : undefined,
@@ -523,9 +612,13 @@ export function RouteConfigPage() {
         ? Number(form.estimatedDurationMinutes)
         : undefined,
       isViceVersa: true,
-      mapReferenceUrl: form.mapReferenceUrl || activeReferenceUrl,
-      googleMapReferenceUrl: form.mapReferenceUrl || activeReferenceUrl,
-      status: editing?.status || "active"
+      status: editing?.status || "active",
+      ...(fareStopWaypoints
+        ? {
+            waypoints: fareStopWaypoints,
+            stops: fareStopWaypoints
+          }
+        : {})
     };
 
     try {
@@ -577,138 +670,6 @@ export function RouteConfigPage() {
     } catch {
       setMessageIsError(true);
       setMessage("Route sync is temporarily unavailable. Please try again later.");
-    }
-  };
-
-  const ensureSelectedMainRoute = async () => {
-    const routeSeed = getRouteSeed(selectedLineId, direction);
-
-    const selectedRouteExtra = asRouteExtra(selectedRoute);
-
-    if (selectedRouteExtra && selectedRouteExtra.source !== "default") {
-      return selectedRouteExtra;
-    }
-
-    const existing = await api.getRoute(routeSeed.id).catch(() => null);
-    const existingRoute = asRouteExtra(existing?.data || null);
-
-    if (existingRoute && existingRoute.source !== "default") {
-      return existingRoute;
-    }
-
-    const created = await api.createRoute({
-      id: routeSeed.id,
-      routeId: routeSeed.id,
-      routeName: routeSeed.routeName,
-      origin: routeSeed.origin,
-      destination: routeSeed.destination,
-      direction,
-      lineId: routeSeed.lineId,
-      routeGroup: routeSeed.routeGroup,
-      price: routeSeed.price,
-      baseFare: routeSeed.price,
-      isViceVersa: true,
-      reverseRouteId: routeSeed.reverseRouteId,
-      status: "active",
-      mapReferenceUrl: routeSeed.mapReferenceUrl,
-      googleMapReferenceUrl: routeSeed.mapReferenceUrl,
-      stops: [],
-      waypoints: []
-    } as Omit<RouteConfig, "id"> & Record<string, unknown>);
-
-    return created.data;
-  };
-
-  const applyReferenceRoutePath = async () => {
-    const referencePoints = getReferenceRoutePoints(selectedLineId, direction);
-
-    if (!referencePoints.length) {
-      setMessageIsError(true);
-      setMessage("No reference route path is available for this selected line yet.");
-      return;
-    }
-
-    const googleReferenceUrl =
-      REFERENCE_GOOGLE_MAP_LINKS[selectedLineId] || activeReferenceUrl;
-
-    setIsApplyingReference(true);
-    setMessageIsError(false);
-    setMessage("Applying reference route path. Please wait...");
-
-    try {
-      const routeForPath = await ensureSelectedMainRoute();
-      const routeSeed = getRouteSeed(selectedLineId, direction);
-
-      const waypoints = referencePoints.map((point, index) => ({
-        id: `ref-${selectedLineId}-${direction}-${index + 1}`,
-        name: point.name,
-        lat: point.lat,
-        lng: point.lng,
-        sequence: index + 1,
-        type:
-          index === 0
-            ? ("origin" as const)
-            : index === referencePoints.length - 1
-              ? ("destination" as const)
-              : ("waypoint" as const),
-        lineId: selectedLineId,
-        direction,
-        origin: index === 0 ? routeSeed.origin : undefined,
-        destination:
-          index === referencePoints.length - 1 ? routeSeed.destination : undefined
-      }));
-      const distanceKm = calculateReferenceDistanceKm(referencePoints);
-      const estimatedDurationMinutes = estimateReferenceDurationMinutes(distanceKm);
-
-      const saved = await api.updateRoutePath(routeForPath.id, {
-        routeName: routeSeed.routeName,
-        origin: routeSeed.origin,
-        destination: routeSeed.destination,
-        direction,
-        reverseRouteId: routeSeed.reverseRouteId,
-        price: routeSeed.price,
-        baseFare: routeSeed.price,
-        isViceVersa: true,
-        status: "active",
-        waypoints,
-        ...(distanceKm ? { distanceKm } : {}),
-        ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
-        mapReferenceUrl: googleReferenceUrl,
-        googleMapReferenceUrl: googleReferenceUrl,
-        routeGeometrySource: "curated-reference",
-        lineId: selectedLineId,
-        routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
-      });
-
-      console.log("Saved reference route", saved.data.id, waypoints.length);
-
-      await routes.refresh();
-      setShowAllRoutesOnMap(false);
-      setSelectedRouteId(saved.data.id);
-      setRouteMetrics((current) => ({
-        ...current,
-        [saved.data.id]: {
-          distanceKm,
-          estimatedDurationMinutes
-        }
-      }));
-      setMessageIsError(false);
-      const successMessage = `Reference path applied — ${waypoints.length} waypoints saved. You can fine-tune it using Manual edit route.`;
-      setMessage(successMessage);
-
-      if (referenceMessageTimerRef.current !== null) {
-        window.clearTimeout(referenceMessageTimerRef.current);
-      }
-
-      referenceMessageTimerRef.current = window.setTimeout(() => {
-        setMessage((current) => (current === successMessage ? null : current));
-        referenceMessageTimerRef.current = null;
-      }, 4000);
-    } catch {
-      setMessageIsError(true);
-      setMessage("Could not save route path. Please try again.");
-    } finally {
-      setIsApplyingReference(false);
     }
   };
 
@@ -770,109 +731,144 @@ export function RouteConfigPage() {
                 </button>
               </div>
 
-              <button
-                type="button"
-                className="soft-button"
-                onClick={applyReferenceRoutePath}
-                disabled={isApplyingReference}
-                title="Apply curated waypoints based on the Google Maps reference link"
-                style={{
-                  padding: "6px 10px",
-                  fontSize: "12px",
-                  opacity: isApplyingReference ? 0.65 : 1
-                }}
-              >
-                <MapPinned size={14} />
-                {isApplyingReference ? "Applying..." : "Use reference route path"}
-              </button>
-
               <MapPinned size={22} />
             </div>
           </div>
 
-          {selectedRoute ? (
-            <RoutePreviewMap
-              routes={mapRoutes}
-              selectedRouteId={highlightRouteId}
-              onRouteMetrics={handleRouteMetrics}
-              onSaveWaypoints={async (
-                routeId,
-                points,
-                distanceKm,
-                estimatedDurationMinutes
-              ) => {
-                const waypoints = points.map((point, index) => ({
-                  id: `wp-${Date.now()}-${index}`,
-                  lat: point[0],
-                  lng: point[1],
-                  sequence: index + 1,
-                  type:
-                    index === 0
-                      ? ("origin" as const)
-                      : index === points.length - 1
-                        ? ("destination" as const)
-                        : ("waypoint" as const),
-                  lineId: selectedLineId,
+          <RoutePreviewMap
+            routes={mapRoutes}
+            selectedRouteId={highlightRouteId}
+            editableRouteId={selectedRoute?.id || selectedRouteSeed.id}
+            draftRouteName={selectedRouteSeed.routeName}
+            seedControlPoints={routeSeedControlPoints}
+            fareStops={visibleFareMatrixRows}
+            activeFareStopId={activeFareStopMapId}
+            fareStopDraftPoints={isFareStopEditor ? fareStopDraftPoints : []}
+            fareStopLabels={{
+              origin: form.origin || selectedRouteSeed.origin,
+              destination: form.destination || selectedRouteSeed.destination
+            }}
+            onFareStopDraftChange={isFareStopEditor ? setFareStopDraftPoints : undefined}
+            onFareStopMetrics={isFareStopEditor ? handleFareStopMetrics : undefined}
+            onRouteMetrics={handleRouteMetrics}
+            onSaveWaypoints={async (
+              routeId,
+              points,
+              distanceKm,
+              estimatedDurationMinutes
+            ) => {
+              const isNewRoute = !selectedRoute || isDefaultRoutePlaceholder(selectedRoute);
+              let targetRouteId = routeId;
+
+              if (isNewRoute) {
+                targetRouteId = selectedRouteSeed.id;
+                await api.createRoute({
+                  id: targetRouteId,
+                  routeId: targetRouteId,
+                  routeName: selectedRouteSeed.routeName,
+                  origin: selectedRouteSeed.origin,
+                  destination: selectedRouteSeed.destination,
                   direction,
-                  origin: index === 0 ? selectedRouteSeed.origin : undefined,
-                  destination:
-                    index === points.length - 1 ? selectedRouteSeed.destination : undefined
-                }));
+                  lineId: selectedRouteSeed.lineId,
+                  routeGroup: selectedRouteSeed.routeGroup,
+                  price: selectedRouteSeed.price,
+                  baseFare: selectedRouteSeed.price,
+                  isViceVersa: true,
+                  reverseRouteId: selectedRouteSeed.reverseRouteId,
+                  status: "active",
+                  stops: [],
+                  waypoints: []
+                } as Omit<RouteConfig, "id"> & Record<string, unknown>);
+              }
 
-                try {
-                  await api.updateRoutePath(routeId, {
-                    routeName: selectedRouteSeed.routeName,
-                    origin: selectedRouteSeed.origin,
-                    destination: selectedRouteSeed.destination,
-                    direction,
-                    reverseRouteId: selectedRouteSeed.reverseRouteId,
-                    price: selectedRouteSeed.price,
-                    baseFare: selectedRouteSeed.price,
+              const waypoints = buildRouteWaypoints(
+                points,
+                selectedLineId,
+                direction,
+                selectedRouteSeed
+              );
+              const reverseDirection: RouteConfig["direction"] =
+                direction === "forward" ? "reverse" : "forward";
+              const reverseSeed = getRouteSeed(selectedLineId, reverseDirection);
+              const reverseRouteExists = rows.some((route) => route.id === reverseSeed.id);
+              const reversedPoints = [...points].reverse();
+              const reverseWaypoints = buildRouteWaypoints(
+                reversedPoints,
+                selectedLineId,
+                reverseDirection,
+                reverseSeed
+              );
+
+              try {
+                await api.updateRoutePath(targetRouteId, {
+                  routeName: selectedRouteSeed.routeName,
+                  origin: selectedRouteSeed.origin,
+                  destination: selectedRouteSeed.destination,
+                  direction,
+                  reverseRouteId: selectedRouteSeed.reverseRouteId,
+                  price: selectedRouteSeed.price,
+                  baseFare: selectedRouteSeed.price,
+                  isViceVersa: true,
+                  status: "active",
+                  waypoints,
+                  distanceKm,
+                  ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
+                  routeGeometrySource: "osrm",
+                  plannedByAdmin: true,
+                  lineId: selectedLineId,
+                  routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
+                });
+
+                if (!reverseRouteExists) {
+                  await api.createRoute({
+                    id: reverseSeed.id,
+                    routeId: reverseSeed.id,
+                    routeName: reverseSeed.routeName,
+                    origin: reverseSeed.origin,
+                    destination: reverseSeed.destination,
+                    direction: reverseDirection,
+                    lineId: reverseSeed.lineId,
+                    routeGroup: reverseSeed.routeGroup,
+                    price: reverseSeed.price,
+                    baseFare: reverseSeed.price,
                     isViceVersa: true,
+                    reverseRouteId: reverseSeed.reverseRouteId,
                     status: "active",
-                    waypoints,
-                    distanceKm,
-                    ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
-                    mapReferenceUrl: activeReferenceUrl,
-                    googleMapReferenceUrl: activeReferenceUrl,
-                    routeGeometrySource: "manual",
-                    lineId: selectedLineId,
-                    routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
-                  });
-
-                  setMessageIsError(false);
-                  setMessage("Route path saved. Live Fleet Map will use this route.");
-                  await routes.refresh();
-                } catch {
-                  setMessageIsError(true);
-                  setMessage("Could not save route path. Please try again.");
-                  throw new Error("Could not save route path.");
+                    stops: [],
+                    waypoints: []
+                  } as Omit<RouteConfig, "id"> & Record<string, unknown>);
                 }
-              }}
-            />
-          ) : (
-            <div className="friendly-message" style={{ minHeight: 260, display: "grid", placeItems: "center" }}>
-              <div style={{ textAlign: "center" }}>
-                <strong>
-                  {direction === "reverse"
-                    ? `No reverse route exists yet for ${getRouteLineLabel(selectedLineId)}.`
-                    : `No forward route exists yet for ${getRouteLineLabel(selectedLineId)}.`}
-                </strong>
-                <p style={{ margin: "8px 0 14px", color: "var(--muted)" }}>
-                  Click Create from reference path.
-                </p>
-                <button
-                  type="button"
-                  className="primary-action"
-                  onClick={applyReferenceRoutePath}
-                  disabled={isApplyingReference}
-                >
-                  <MapPinned size={16} />
-                  {isApplyingReference ? "Applying..." : "Create from reference path"}
-                </button>
-              </div>
-            </div>
-          )}
+
+                await api.updateRoutePath(reverseSeed.id, {
+                  routeName: reverseSeed.routeName,
+                  origin: reverseSeed.origin,
+                  destination: reverseSeed.destination,
+                  direction: reverseDirection,
+                  reverseRouteId: reverseSeed.reverseRouteId,
+                  price: reverseSeed.price,
+                  baseFare: reverseSeed.price,
+                  isViceVersa: true,
+                  status: "active",
+                  waypoints: reverseWaypoints,
+                  distanceKm,
+                  ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
+                  routeGeometrySource: "osrm",
+                  plannedByAdmin: true,
+                  lineId: selectedLineId,
+                  routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
+                });
+
+                setMessageIsError(false);
+                setMessage("Route path saved. Reverse direction was updated automatically.");
+                await routes.refresh();
+                if (isNewRoute) setSelectedRouteId(targetRouteId);
+              } catch {
+                setMessageIsError(true);
+                setMessage("Could not save route path. Please try again.");
+                throw new Error("Could not save route path.");
+              }
+            }}
+          />
 
           <div className="route-line-tabs">
             {visibleLines.map((line) => (
@@ -951,13 +947,13 @@ export function RouteConfigPage() {
 
                         if (activeRoute) {
                           setSelectedRouteId(activeRoute.id);
-                          setMessage("Selected route is now shown on the map. Use Manual edit route to update its path.");
+                          setMessage("Selected route is now shown on the map.");
                         } else {
                           setSelectedRouteId(null);
                           setMessage(
                             direction === "reverse"
-                              ? "No reverse route yet. Create it from the reference path."
-                              : "No forward route yet. Create it from the reference path."
+                              ? "No reverse route yet. Click 'Map Custom Route' to start drawing."
+                              : "No forward route yet. Click 'Map Custom Route' to start drawing."
                           );
                         }
                       }}
@@ -1015,7 +1011,7 @@ export function RouteConfigPage() {
             <dd>
               {selectedRoute?.distanceKm || selectedRoute?.distance
                 ? `${formatNumber(selectedRoute.distanceKm || selectedRoute.distance || 0)} km`
-                : "Auto-computed after saving route path"}
+                : "Auto-computed by map"}
             </dd>
           </div>
           <div>
@@ -1023,18 +1019,12 @@ export function RouteConfigPage() {
             <dd>
               {selectedRoute?.estimatedDurationMinutes
                 ? formatDuration(selectedRoute.estimatedDurationMinutes)
-                : "Auto-computed after saving route path"}
+                : "Auto-computed by map"}
             </dd>
           </div>
           <div>
             <dt>Waypoints</dt>
             <dd>{formatNumber(selectedRoute?.waypoints?.length || 0)}</dd>
-          </div>
-          <div>
-            <dt>Google Maps reference</dt>
-            <dd style={{ wordBreak: "break-all", fontSize: "0.76rem" }}>
-              {activeReferenceUrl || selectedRouteSeed.mapReferenceUrl || "Not set"}
-            </dd>
           </div>
         </dl>
       </section>
@@ -1068,6 +1058,17 @@ export function RouteConfigPage() {
                   </p>
                 ) : null}
               </div>
+
+              {isFareStopEditor ? (
+                <div className="fare-map-assignment">
+                  <strong>Map passenger segment on the blue line</strong>
+                  <span>
+                    {fareStopDraftPoints.length >= 2
+                      ? "A/B ready. Purple line will follow the main route only."
+                      : "Click two points on the map: A for origin, B for destination/drop-off."}
+                  </span>
+                </div>
+              ) : null}
 
               <div className="form-row">
                 <label>
@@ -1124,7 +1125,7 @@ export function RouteConfigPage() {
                   <input
                     value={form.distanceKm ? `${Number(form.distanceKm).toFixed(1)} km` : ""}
                     readOnly
-                    placeholder="Auto-computed from saved route"
+                    placeholder="Auto-computed from map"
                     className="locked-input"
                   />
                 </label>
@@ -1134,25 +1135,11 @@ export function RouteConfigPage() {
                   <input
                     value={form.estimatedDurationMinutes ? formatDuration(form.estimatedDurationMinutes) : ""}
                     readOnly
-                    placeholder="Auto-computed from saved route"
+                    placeholder="Auto-computed from map"
                     className="locked-input"
                   />
                 </label>
               </div>
-
-              <label>
-                Google Maps Link Reference
-                <input
-                  type="url"
-                  value={form.mapReferenceUrl}
-                  onChange={(event) => setForm((current) => ({ ...current, mapReferenceUrl: event.target.value }))}
-                  placeholder="https://maps.app.goo.gl/..."
-                />
-              </label>
-
-              <p className="form-hint friendly-message" style={{ fontSize: "0.82rem" }}>
-                Google Maps link is saved as reference only. It will not overwrite the saved route path unless you manually edit and save the route path.
-              </p>
 
               {form.estimatedDurationMinutes ? (
                 <p className="form-hint friendly-message" style={{ fontSize: "0.82rem" }}>
@@ -1279,7 +1266,7 @@ export function RouteConfigPage() {
                 cell: (row) => (
                   <div className="table-action-row">
                     <button type="button" className="soft-button table-action" onClick={() => openEditorForFareStop(row)}>
-                      <Pencil size={14} /> Edit fare stop
+                      <Pencil size={14} /> Edit / map fare stop
                     </button>
 
                     <button

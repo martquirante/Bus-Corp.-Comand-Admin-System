@@ -14,11 +14,6 @@ export type MainRouteLine = {
   routes: RouteConfig[];
 };
 
-export const ROUTE_GOOGLE_MAP_REFS: Record<"fvr-pitx" | "fvr-stcruz", string> = {
-  "fvr-pitx": "https://maps.app.goo.gl/afMZornDfTm4Rpzh9",
-  "fvr-stcruz": "https://maps.app.goo.gl/aAXkcU3hhThpB9RG7"
-};
-
 const PITX_KEYWORDS = [
   "pitx",
   "pitix",
@@ -162,8 +157,6 @@ const buildRouteSearchText = (route: RouteConfig) => {
       route.destination,
       route.legacyKey,
       route.legacyPath,
-      route.mapReferenceUrl,
-      extra.googleMapReferenceUrl,
       ...stops,
       ...waypoints
     ].join(" ")
@@ -341,13 +334,4 @@ export function getRouteLineShortLabel(lineId?: MainRouteLineId | string | null)
   if (normalized === "hidden") return "Advanced route list";
 
   return "Unlinked route";
-}
-
-export function getGoogleMapReferenceForLine(lineId?: MainRouteLineId | string | null) {
-  const normalized = normalizeLineId(lineId || "");
-
-  if (normalized === "fvr-pitx") return ROUTE_GOOGLE_MAP_REFS["fvr-pitx"];
-  if (normalized === "fvr-stcruz") return ROUTE_GOOGLE_MAP_REFS["fvr-stcruz"];
-
-  return "";
 }

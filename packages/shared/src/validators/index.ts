@@ -22,6 +22,7 @@ export const routeConfigSchema = z.object({
   isViceVersa: z.coerce.boolean().default(false).optional(),
   reverseRouteId: z.string().optional(),
   mapReferenceUrl: z.string().url().or(z.literal("")).optional(),
+  plannedByAdmin: z.coerce.boolean().optional(),
   assignedBusId: z.string().optional(),
   assignedTripScheduleId: z.string().optional(),
   stops: z

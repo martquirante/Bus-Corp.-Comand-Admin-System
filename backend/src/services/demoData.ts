@@ -196,7 +196,6 @@ export const demoRootData = {
       isViceVersa: true,
       reverseRouteId: "gma-kamuning-to-fvr-terminal",
       status: "active",
-      mapReferenceUrl: "https://maps.app.goo.gl/afMZornDfTm4Rpzh9",
       baseFare: 25,
       farePerKm: 2,
       price: 25,

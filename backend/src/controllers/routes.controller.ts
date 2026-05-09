@@ -10,6 +10,7 @@ type RouteExtraFields = {
   trafficDurationMinutes?: number;
   encodedPolyline?: string;
   routeGeometrySource?: string;
+  plannedByAdmin?: boolean;
 };
 
 const routeStatusSchema = z.object({
@@ -54,21 +55,19 @@ const routePathSchema = z.object({
   trafficDurationMinutes: z.coerce.number().optional(),
   encodedPolyline: z.string().optional(),
   routeGeometrySource: z.string().optional(),
-  mapReferenceUrl: z.string().optional(),
-  googleMapReferenceUrl: z.string().optional()
+  plannedByAdmin: z.coerce.boolean().optional(),
+  mapReferenceUrl: z.string().optional()
 });
 
 const routeReferenceSchema = z.object({
-  mapReferenceUrl: z.string().optional(),
-  googleMapReferenceUrl: z.string().optional()
+  mapReferenceUrl: z.string().optional()
 });
 
 const recalculateRoutePathSchema = z.object({
   origin: z.string().optional(),
   destination: z.string().optional(),
   waypoints: z.array(waypointSchema).optional(),
-  mapReferenceUrl: z.string().optional(),
-  googleMapReferenceUrl: z.string().optional()
+  mapReferenceUrl: z.string().optional()
 });
 
 const createRouteSchema = routeConfigSchema.passthrough();
@@ -226,18 +225,15 @@ export const routesController = {
   /**
    * PATCH /api/routes/:id/reference
    *
-   * Saves Google Maps link as reference metadata only.
+   * Saves non-Google map reference metadata only.
    * This does NOT overwrite saved waypoints.
    */
   async updateRouteReference(req: Request, res: Response) {
     const payload = routeReferenceSchema.parse(req.body);
 
-    const googleMapReferenceUrl =
-      payload.googleMapReferenceUrl || payload.mapReferenceUrl || "";
-
     const route = await routeService.updateRouteReference(
       req.params.id,
-      googleMapReferenceUrl,
+      payload.mapReferenceUrl || "",
       req.user?.email || "system"
     );
 

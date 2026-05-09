@@ -90,9 +90,9 @@ export type RoutePathPayload = {
    * so frontend does not break if @pos-bus/shared/dist is stale.
    */
   routeGeometrySource?: string;
+  plannedByAdmin?: boolean;
 
   mapReferenceUrl?: string;
-  googleMapReferenceUrl?: string;
 };
 
 export type RouteRecalculatePayload = {
@@ -100,7 +100,6 @@ export type RouteRecalculatePayload = {
   destination?: string;
   waypoints?: RouteWaypointPayload[];
   mapReferenceUrl?: string;
-  googleMapReferenceUrl?: string;
 };
 
 export type RouteRecalculateResult = {
@@ -304,12 +303,11 @@ export const api = {
     );
   },
 
-  async updateRouteReference(id: string, googleMapReferenceUrl: string) {
+  async updateRouteReference(id: string, mapReferenceUrl: string) {
     return apiFetch<RouteConfig>(`/routes/${encodeURIComponent(id)}/reference`, {
       method: "PATCH",
       body: JSON.stringify({
-        mapReferenceUrl: googleMapReferenceUrl,
-        googleMapReferenceUrl
+        mapReferenceUrl
       })
     });
   },

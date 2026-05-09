@@ -23,10 +23,11 @@ type ExtendedWaypoint = NonNullable<RouteConfig["waypoints"]>[number] & {
 type ExtendedRouteConfig = RouteConfig & {
   lineId?: string;
   routeGroup?: string;
-  googleMapReferenceUrl?: string;
+  googleMapReferenceUrl?: string | null;
   trafficDurationMinutes?: number;
   encodedPolyline?: string;
   routeGeometrySource?: string;
+  plannedByAdmin?: boolean;
   assignedBusId?: string;
   assignedTripScheduleId?: string;
   createdBy?: string;
@@ -38,9 +39,6 @@ type ExtendedRouteConfig = RouteConfig & {
 
 type RoutePatch = Partial<Omit<ExtendedRouteConfig, "id">>;
 
-const FVR_PITX_REF = "https://maps.app.goo.gl/afMZornDfTm4Rpzh9";
-const FVR_ST_CRUZ_REF = "https://maps.app.goo.gl/aAXkcU3hhThpB9RG7";
-
 const mainRouteIds = new Set([
   "fvr-to-pitx-via-gma",
   "pitx-to-fvr-via-gma",
@@ -48,91 +46,19 @@ const mainRouteIds = new Set([
   "st-cruz-to-fvr"
 ]);
 
-const defaultRoutes = [
-  {
-    id: "fvr-to-st-cruz",
-    lineId: "fvr-stcruz",
-    routeGroup: "FVR_ST_CRUZ",
-    routeName: "FVR to ST. CRUZ",
-    origin: "FVR Terminal",
-    destination: "ST. CRUZ",
-    direction: "forward",
-    isViceVersa: true,
-    reverseRouteId: "st-cruz-to-fvr",
-    status: "active",
-    mapReferenceUrl: FVR_ST_CRUZ_REF,
-    googleMapReferenceUrl: FVR_ST_CRUZ_REF,
-    price: 0,
-    baseFare: 0,
-    farePerKm: 0,
-    stops: [],
-    waypoints: [],
-    source: "default"
-  },
-  {
-    id: "st-cruz-to-fvr",
-    lineId: "fvr-stcruz",
-    routeGroup: "FVR_ST_CRUZ",
-    routeName: "ST. CRUZ to FVR",
-    origin: "ST. CRUZ",
-    destination: "FVR Terminal",
-    direction: "reverse",
-    isViceVersa: true,
-    reverseRouteId: "fvr-to-st-cruz",
-    status: "active",
-    mapReferenceUrl: FVR_ST_CRUZ_REF,
-    googleMapReferenceUrl: FVR_ST_CRUZ_REF,
-    price: 0,
-    baseFare: 0,
-    farePerKm: 0,
-    stops: [],
-    waypoints: [],
-    source: "default"
-  },
-  {
-    id: "fvr-to-pitx-via-gma",
-    lineId: "fvr-pitx",
-    routeGroup: "FVR_PITX",
-    routeName: "FVR to PITX via GMA",
-    origin: "FVR Terminal",
-    destination: "PITX",
-    direction: "forward",
-    isViceVersa: true,
-    reverseRouteId: "pitx-to-fvr-via-gma",
-    status: "active",
-    mapReferenceUrl: FVR_PITX_REF,
-    googleMapReferenceUrl: FVR_PITX_REF,
-    price: 0,
-    baseFare: 0,
-    farePerKm: 0,
-    stops: [],
-    waypoints: [],
-    source: "default"
-  },
-  {
-    id: "pitx-to-fvr-via-gma",
-    lineId: "fvr-pitx",
-    routeGroup: "FVR_PITX",
-    routeName: "PITX to FVR via GMA",
-    origin: "PITX",
-    destination: "FVR Terminal",
-    direction: "reverse",
-    isViceVersa: true,
-    reverseRouteId: "fvr-to-pitx-via-gma",
-    status: "active",
-    mapReferenceUrl: FVR_PITX_REF,
-    googleMapReferenceUrl: FVR_PITX_REF,
-    price: 0,
-    baseFare: 0,
-    farePerKm: 0,
-    stops: [],
-    waypoints: [],
-    source: "default"
-  }
-] satisfies ExtendedRouteConfig[];
-
 const asExtendedRoute = (route?: RouteConfig | null): ExtendedRouteConfig | null =>
   route ? (route as ExtendedRouteConfig) : null;
+
+const sanitizeMapReference = (value: unknown) => {
+  const reference = String(value || "").trim();
+  if (!reference) return "";
+
+  return /(^|\/\/)(maps\.app\.goo\.gl|goo\.gl|maps\.google\.com|google\.com\/maps)/i.test(
+    reference
+  )
+    ? ""
+    : reference;
+};
 
 const toNumber = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -208,9 +134,7 @@ const inferLineId = (route: Partial<ExtendedRouteConfig> | RawRoute): string => 
       route.origin,
       route.destination,
       route.legacyKey,
-      route.legacyPath,
-      route.mapReferenceUrl,
-      route.googleMapReferenceUrl
+      route.legacyPath
     ].join(" ")
   );
 
@@ -244,10 +168,20 @@ const routeGroupForLineId = (lineId?: string) => {
   return "";
 };
 
-const referenceForLineId = (lineId?: string) => {
-  if (lineId === "fvr-pitx") return FVR_PITX_REF;
-  if (lineId === "fvr-stcruz") return FVR_ST_CRUZ_REF;
-  return "";
+const hasSavedRouteGeometry = (route: Partial<ExtendedRouteConfig>) =>
+  toRoutePathWaypoints(route.waypoints).length > 1;
+
+const isAdminPlannedMainRoute = (route: ExtendedRouteConfig) => {
+  if (!mainRouteIds.has(route.id)) return false;
+  if (!hasSavedRouteGeometry(route)) return false;
+
+  const geometrySource = normalizeText(route.routeGeometrySource);
+  return (
+    route.plannedByAdmin === true ||
+    geometrySource === "osrm" ||
+    geometrySource === "openrouteservice" ||
+    geometrySource === "manual"
+  );
 };
 
 const toWaypointArray = (value: unknown): ExtendedWaypoint[] => {
@@ -307,10 +241,7 @@ const normalizeLegacyRoutes = (raw: RawRoutes | null, direction: RouteDirection)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, route]) => {
       const lineId = inferLineId({ ...route, legacyKey: key });
-      const mapReferenceUrl =
-        route.mapReferenceUrl ||
-        route.googleMapReferenceUrl ||
-        referenceForLineId(lineId);
+      const mapReferenceUrl = sanitizeMapReference(route.mapReferenceUrl);
 
       return {
         id: `legacy-${direction}-${key}`,
@@ -340,8 +271,7 @@ const normalizeLegacyRoutes = (raw: RawRoutes | null, direction: RouteDirection)
         status: route.status || "active",
         isViceVersa: Boolean(route.isViceVersa),
         reverseRouteId: route.reverseRouteId,
-        mapReferenceUrl,
-        googleMapReferenceUrl: route.googleMapReferenceUrl || mapReferenceUrl,
+        mapReferenceUrl: mapReferenceUrl || undefined,
         encodedPolyline: route.encodedPolyline,
         routeGeometrySource: route.routeGeometrySource,
         stops: toWaypointArray(route.stops),
@@ -363,10 +293,7 @@ const normalizeAdminRoutes = (raw: RawRoutes | null): RouteConfig[] =>
     .map(([key, route]) => {
       const id = String(route.routeId || key);
       const lineId = inferLineId({ ...route, id });
-      const mapReferenceUrl =
-        route.mapReferenceUrl ||
-        route.googleMapReferenceUrl ||
-        referenceForLineId(lineId);
+      const mapReferenceUrl = sanitizeMapReference(route.mapReferenceUrl);
 
       return {
         id,
@@ -396,10 +323,10 @@ const normalizeAdminRoutes = (raw: RawRoutes | null): RouteConfig[] =>
         status: route.status || "active",
         isViceVersa: Boolean(route.isViceVersa),
         reverseRouteId: route.reverseRouteId,
-        mapReferenceUrl,
-        googleMapReferenceUrl: route.googleMapReferenceUrl || mapReferenceUrl,
+        mapReferenceUrl: mapReferenceUrl || undefined,
         encodedPolyline: route.encodedPolyline,
         routeGeometrySource: route.routeGeometrySource,
+        plannedByAdmin: Boolean(route.plannedByAdmin),
         assignedBusId: route.assignedBusId,
         assignedTripScheduleId: route.assignedTripScheduleId,
         stops: toWaypointArray(route.stops),
@@ -439,10 +366,10 @@ const mergeProductionRoutes = (
 ): RouteConfig[] => {
   const byId = new Map<string, ExtendedRouteConfig>();
 
-  [...defaultRoutes, ...supabaseRoutes, ...adminRoutes].forEach((baseRoute) => {
+  [...supabaseRoutes, ...adminRoutes].forEach((baseRoute) => {
     const route = baseRoute as ExtendedRouteConfig;
 
-    if (!mainRouteIds.has(route.id)) return;
+    if (!isAdminPlannedMainRoute(route)) return;
 
     const existing = byId.get(route.id);
     const routeIsAuthoritative =
@@ -454,15 +381,9 @@ const mergeProductionRoutes = (
       lineId: route.lineId || existing?.lineId || inferLineId(route),
       routeGroup: route.routeGroup || existing?.routeGroup || routeGroupForLineId(route.lineId),
       mapReferenceUrl:
-        route.mapReferenceUrl ||
-        route.googleMapReferenceUrl ||
-        existing?.mapReferenceUrl ||
-        referenceForLineId(route.lineId),
-      googleMapReferenceUrl:
-        route.googleMapReferenceUrl ||
-        route.mapReferenceUrl ||
-        existing?.googleMapReferenceUrl ||
-        referenceForLineId(route.lineId),
+        sanitizeMapReference(route.mapReferenceUrl) ||
+        sanitizeMapReference(existing?.mapReferenceUrl) ||
+        undefined,
       waypoints: routeIsAuthoritative
         ? route.waypoints || []
         : route.waypoints?.length
@@ -496,11 +417,8 @@ const routePayload = (
     route.lineId || currentExtra?.lineId || inferLineId({ ...currentExtra, ...route, id });
 
   const reference =
-    route.googleMapReferenceUrl ||
-    route.mapReferenceUrl ||
-    currentExtra?.googleMapReferenceUrl ||
-    currentExtra?.mapReferenceUrl ||
-    referenceForLineId(lineId);
+    sanitizeMapReference(route.mapReferenceUrl) ||
+    sanitizeMapReference(currentExtra?.mapReferenceUrl);
 
   return {
     routeId: id,
@@ -514,7 +432,7 @@ const routePayload = (
     reverseRouteId: route.reverseRouteId ?? currentExtra?.reverseRouteId,
     status: route.status || currentExtra?.status || "active",
     mapReferenceUrl: reference,
-    googleMapReferenceUrl: reference,
+    googleMapReferenceUrl: null,
     distanceKm: route.distanceKm ?? route.distance ?? currentExtra?.distanceKm ?? currentExtra?.distance,
     distance: route.distance ?? route.distanceKm ?? currentExtra?.distance,
     estimatedDurationMinutes:
@@ -522,6 +440,7 @@ const routePayload = (
     trafficDurationMinutes: route.trafficDurationMinutes ?? currentExtra?.trafficDurationMinutes,
     encodedPolyline: route.encodedPolyline ?? currentExtra?.encodedPolyline,
     routeGeometrySource: route.routeGeometrySource ?? currentExtra?.routeGeometrySource,
+    plannedByAdmin: route.plannedByAdmin ?? currentExtra?.plannedByAdmin ?? false,
     baseFare: roundFare(route.baseFare ?? route.price ?? currentExtra?.baseFare ?? currentExtra?.price ?? 0),
     farePerKm: route.farePerKm ?? currentExtra?.farePerKm ?? 0,
     price: roundFare(route.price ?? route.baseFare ?? currentExtra?.price ?? currentExtra?.baseFare ?? 0),
@@ -543,21 +462,22 @@ const legacyPayload = (
   actor: string,
   current: RawRoute = {}
 ) => {
+  const { googleMapReferenceUrl: _oldGoogleReference, mapReferenceUrl: _oldMapReference, ...currentWithoutMapReference } = current;
+  const { googleMapReferenceUrl: _incomingGoogleReference, ...routeWithoutGoogleReference } = route as RoutePatch & {
+    googleMapReferenceUrl?: string;
+  };
   const now = new Date().toISOString();
   const origin = normalizeLabel(route.origin || current.origin || "Unknown Origin");
   const destination = normalizeLabel(route.destination || current.destination || "Unknown Destination");
   const lineId = route.lineId || current.lineId || inferLineId({ ...current, ...route, direction });
 
   const reference =
-    route.googleMapReferenceUrl ||
-    route.mapReferenceUrl ||
-    current.googleMapReferenceUrl ||
-    current.mapReferenceUrl ||
-    referenceForLineId(lineId);
+    sanitizeMapReference(route.mapReferenceUrl) ||
+    sanitizeMapReference(current.mapReferenceUrl);
 
   return {
-    ...current,
-    ...route,
+    ...currentWithoutMapReference,
+    ...routeWithoutGoogleReference,
     lineId,
     routeGroup: route.routeGroup || current.routeGroup || routeGroupForLineId(lineId),
     routeName: route.routeName || current.routeName || `${origin} to ${destination}`,
@@ -571,7 +491,7 @@ const legacyPayload = (
     estimatedDurationMinutes: route.estimatedDurationMinutes ?? current.estimatedDurationMinutes,
     trafficDurationMinutes: route.trafficDurationMinutes ?? current.trafficDurationMinutes,
     mapReferenceUrl: reference,
-    googleMapReferenceUrl: reference,
+    googleMapReferenceUrl: null,
     status: route.status || current.status || "active",
     stops: route.stops ?? current.stops ?? [],
     waypoints: route.waypoints ?? current.waypoints ?? [],
@@ -815,11 +735,8 @@ export const routeService = {
     const replacementWaypoints = toRoutePathWaypoints(patch.waypoints);
 
     const reference =
-      patch.googleMapReferenceUrl ||
-      patch.mapReferenceUrl ||
-      current?.googleMapReferenceUrl ||
-      current?.mapReferenceUrl ||
-      referenceForLineId(lineId);
+      sanitizeMapReference(patch.mapReferenceUrl) ||
+      sanitizeMapReference(current?.mapReferenceUrl);
 
     const updatedRoute = await this.updateRoute(
       id,
@@ -845,7 +762,7 @@ export const routeService = {
         encodedPolyline: patch.encodedPolyline ?? current?.encodedPolyline,
         routeGeometrySource: patch.routeGeometrySource ?? current?.routeGeometrySource ?? "manual",
         mapReferenceUrl: reference,
-        googleMapReferenceUrl: reference
+        googleMapReferenceUrl: null as unknown as string
       },
       actor
     );
@@ -861,14 +778,14 @@ export const routeService = {
 
   async updateRouteReference(
     id: string,
-    googleMapReferenceUrl: string,
+    mapReferenceUrl: string,
     actor = "system"
   ): Promise<RouteConfig> {
     return this.updateRoute(
       id,
       {
-        mapReferenceUrl: googleMapReferenceUrl,
-        googleMapReferenceUrl
+        mapReferenceUrl: sanitizeMapReference(mapReferenceUrl),
+        googleMapReferenceUrl: null as unknown as string
       },
       actor
     );

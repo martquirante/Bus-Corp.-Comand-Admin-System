@@ -3,20 +3,21 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouteConfig } from "@pos-bus/shared";
 import {
+  Check,
   GripVertical,
-  LocateFixed,
   Map,
   Maximize2,
   Minimize2,
-  Plus,
   Satellite,
   Search,
-  TrafficCone,
   Trash2,
   Undo2,
   X
 } from "lucide-react";
 import { getRouteDisplayName, normalizeRouteLabel } from "@/utils/routeLines";
+import { MAIN_TERMINALS, TERMINAL_BOUNDS, TERMINAL_ICON_ASSET } from "@/utils/terminals";
+
+export type LatLngPoint = [number, number];
 
 type LeafletLatLng = {
   lat: number;
@@ -44,6 +45,9 @@ type LeafletLayerTarget = LeafletMap | LeafletLayer;
 type LeafletLayer = {
   addTo: (target: LeafletLayerTarget) => LeafletLayer;
   bindPopup: (content: string, options?: Record<string, unknown>) => LeafletLayer;
+  bringToBack?: () => LeafletLayer;
+  redraw?: () => LeafletLayer;
+  setZIndex?: (zIndex: number) => LeafletLayer;
 };
 
 type LeafletMarker = LeafletLayer & {
@@ -72,7 +76,7 @@ type LeafletMap = {
 type LeafletApi = {
   map: (
     element: HTMLElement,
-    options?: { zoomControl?: boolean; preferCanvas?: boolean }
+    options?: { zoomControl?: boolean; preferCanvas?: boolean; fadeAnimation?: boolean }
   ) => LeafletMap;
   control: {
     zoom: (options?: { position?: string }) => { addTo: (map: LeafletMap) => void };
@@ -95,8 +99,6 @@ type LeafletWindow = Window & {
   __posBusLeafletLoad?: Promise<LeafletApi>;
 };
 
-type LatLngPoint = [number, number];
-
 type RouteExtraFields = RouteConfig & {
   lineId?: string;
   trafficDurationMinutes?: number;
@@ -111,8 +113,9 @@ type SearchResult = {
   class?: string;
 };
 
-type RoadGeometryResult = {
+export type RoadGeometryResult = {
   points: LatLngPoint[];
+  snappedControlPoints?: LatLngPoint[];
   distanceKm?: number;
   estimatedDurationMinutes?: number;
   warning?: string;
@@ -124,17 +127,20 @@ type PendingSearchPoint = {
   label: string;
 };
 
-type StraightLineSaveState = {
-  routeId: string;
-  points: LatLngPoint[];
+type FareStopSegment = {
+  route: RouteConfig;
+  anchors: [LatLngPoint, LatLngPoint];
+  segment: LatLngPoint[];
   distanceKm?: number;
-  estimatedDurationMinutes?: number;
 };
 
 const LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
 const DEFAULT_CENTER: LatLngPoint = [14.8078, 121.0111];
 const OPENROUTESERVICE_KEY = process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY;
+const MAIN_ROUTE_COLOR = "#0f7ad3";
+const FARE_STOP_COLOR = "#7c3aed";
+const MAX_FARE_STOP_SNAP_METERS = 300;
 
 const asRouteExtra = (route: RouteConfig): RouteExtraFields => route as RouteExtraFields;
 
@@ -200,10 +206,12 @@ const getRoutePoints = (route: RouteConfig): LatLngPoint[] => {
     .map((point) => [point.lat as number, point.lng as number] as LatLngPoint);
 };
 
-const getPointSignature = (points: LatLngPoint[]) =>
-  points
-    .map(([lat, lng], index) => `${index + 1}:${lat.toFixed(6)},${lng.toFixed(6)}`)
-    .join("|");
+const getFareStopAnchors = (route: RouteConfig): [LatLngPoint, LatLngPoint] | null => {
+  const points = getRoutePoints(route);
+  if (points.length < 2) return null;
+
+  return [points[0], points[points.length - 1]];
+};
 
 const haversineMeters = ([lat1, lng1]: LatLngPoint, [lat2, lng2]: LatLngPoint) => {
   const radius = 6371000;
@@ -219,7 +227,7 @@ const haversineMeters = ([lat1, lng1]: LatLngPoint, [lat2, lng2]: LatLngPoint) =
   return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-const calculateLineDistanceKm = (points: LatLngPoint[], map?: LeafletMap | null) => {
+export const calculateLineDistanceKm = (points: LatLngPoint[], map?: LeafletMap | null) => {
   if (points.length < 2) return undefined;
 
   let totalMeters = 0;
@@ -238,7 +246,7 @@ const calculateLineDistanceKm = (points: LatLngPoint[], map?: LeafletMap | null)
   return Number((totalMeters / 1000).toFixed(1));
 };
 
-const estimateTrafficDurationMinutes = (distanceKm?: number) => {
+export const estimateTrafficDurationMinutes = (distanceKm?: number) => {
   if (!distanceKm) return undefined;
 
   const cityBusAverageKph = distanceKm > 40 ? 28 : 22;
@@ -256,29 +264,32 @@ async function fetchFromOsrm(points: LatLngPoint[]): Promise<RoadGeometryResult>
   if (!response.ok) throw new Error("Road route service is unavailable right now.");
 
   const json = await response.json();
-  const route = json?.routes?.[0];
-  const coordinates = route?.geometry?.coordinates;
+  if (json.code !== "Ok" || !json.routes || json.routes.length === 0) {
+    throw new Error("Could not find a valid road route.");
+  }
+
+  const route = json.routes[0];
+  const coordinates = route.geometry.coordinates;
 
   if (!Array.isArray(coordinates)) {
     throw new Error("Road route service did not return a route line.");
   }
 
-  const baseMinutes =
-    typeof route.duration === "number" ? Math.round(route.duration / 60) : undefined;
-
+  const baseMinutes = typeof route.duration === "number" ? Math.round(route.duration / 60) : undefined;
   const trafficAdjustedMinutes = baseMinutes ? Math.round(baseMinutes * 1.35) : undefined;
-  const routeDistanceKm =
-    typeof route.distance === "number" ? Number((route.distance / 1000).toFixed(1)) : undefined;
-  const straightLineKm = Number(
-    (haversineMeters(points[0], points[points.length - 1]) / 1000).toFixed(1)
-  );
-
-  if (routeDistanceKm && straightLineKm && routeDistanceKm > straightLineKm * 2) {
-    throw new Error("Road route service returned an unlikely route line.");
-  }
+  const routeDistanceKm = typeof route.distance === "number" ? Number((route.distance / 1000).toFixed(1)) : undefined;
 
   return {
     points: coordinates.map(([lng, lat]: [number, number]) => [lat, lng] as LatLngPoint),
+    snappedControlPoints: Array.isArray(json.waypoints)
+      ? json.waypoints
+          .map((waypoint: { location?: [number, number] }) => waypoint.location)
+          .filter((location: unknown): location is [number, number] => Array.isArray(location))
+          .map((location: [number, number]) => {
+            const [lng, lat] = location;
+            return [lat, lng] as LatLngPoint;
+          })
+      : undefined,
     distanceKm: routeDistanceKm,
     estimatedDurationMinutes: trafficAdjustedMinutes
   };
@@ -327,12 +338,12 @@ const straightLineFallback = (points: LatLngPoint[]): RoadGeometryResult => {
     points,
     distanceKm,
     estimatedDurationMinutes: estimateTrafficDurationMinutes(distanceKm),
-    warning: "Road path service unavailable — showing straight-line preview. Save anyway?",
+    warning: "Road API is offline. Showing straight lines until the provider recovers.",
     isStraightLineFallback: true
   };
 };
 
-async function fetchRoadGeometry(points: LatLngPoint[]): Promise<RoadGeometryResult> {
+export async function fetchRoadGeometry(points: LatLngPoint[]): Promise<RoadGeometryResult> {
   if (points.length < 2) {
     return {
       points,
@@ -356,16 +367,6 @@ async function fetchRoadGeometry(points: LatLngPoint[]): Promise<RoadGeometryRes
   }
 }
 
-const getRouteColor = (route: RouteConfig) => {
-  const routeExtra = asRouteExtra(route);
-  const text = `${route.id} ${routeExtra.lineId || ""} ${route.routeName || ""} ${
-    route.destination || ""
-  }`.toLowerCase();
-
-  if (text.includes("pitx") || text.includes("pitix")) return "#13a46b";
-  return "#0f7ad3";
-};
-
 const shortPlaceName = (value: string) => {
   const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
   return parts.slice(0, 3).join(", ");
@@ -373,6 +374,10 @@ const shortPlaceName = (value: string) => {
 
 const formatPointLabel = ([lat, lng]: LatLngPoint) =>
   `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+
+const pointsAreNearlyEqual = (left: LatLngPoint[], right: LatLngPoint[]) =>
+  left.length === right.length &&
+  left.every((point, index) => haversineMeters(point, right[index]) < 1.5);
 
 const escapeHtml = (value: string) =>
   value
@@ -386,6 +391,70 @@ const getMarkerRole = (index: number, total: number) => {
   if (index === 0) return "origin";
   if (index === total - 1) return "destination";
   return "waypoint";
+};
+
+const closestPointOnRoute = (routePoints: LatLngPoint[], point: LatLngPoint) => {
+  if (!routePoints.length) return null;
+
+  return routePoints.reduce(
+    (best, routePoint, index) => {
+      const distanceMeters = haversineMeters(routePoint, point);
+      return distanceMeters < best.distanceMeters
+        ? { point: routePoint, index, distanceMeters }
+        : best;
+    },
+    {
+      point: routePoints[0],
+      index: 0,
+      distanceMeters: Number.POSITIVE_INFINITY
+    }
+  );
+};
+
+const routeSegmentBetween = (
+  routePoints: LatLngPoint[],
+  from: LatLngPoint,
+  to: LatLngPoint
+) => {
+  if (routePoints.length < 2) {
+    return {
+      anchors: [from, to] as [LatLngPoint, LatLngPoint],
+      segment: [from, to]
+    };
+  }
+
+  const start = closestPointOnRoute(routePoints, from);
+  const end = closestPointOnRoute(routePoints, to);
+
+  if (!start || !end) {
+    return {
+      anchors: [from, to] as [LatLngPoint, LatLngPoint],
+      segment: [from, to]
+    };
+  }
+
+  const lower = Math.min(start.index, end.index);
+  const upper = Math.max(start.index, end.index);
+  const segment = routePoints.slice(lower, upper + 1);
+  const orderedSegment = start.index <= end.index ? segment : segment.reverse();
+
+  return {
+    anchors: [start.point, end.point] as [LatLngPoint, LatLngPoint],
+    segment: orderedSegment.length > 1 ? orderedSegment : [start.point, end.point]
+  };
+};
+
+const sampleControlPoints = (points: LatLngPoint[], maxPoints = 14) => {
+  if (points.length <= maxPoints) return points;
+
+  const indexes = new Set<number>();
+  const lastIndex = points.length - 1;
+
+  for (let index = 0; index < maxPoints; index += 1) {
+    indexes.add(Math.round((lastIndex * index) / (maxPoints - 1)));
+  }
+
+  return [...indexes].sort((a, b) => a - b).map((index) => points[index]);
 };
 
 async function reverseGeocodePoint(point: LatLngPoint) {
@@ -412,11 +481,29 @@ async function reverseGeocodePoint(point: LatLngPoint) {
 export function RoutePreviewMap({
   routes,
   selectedRouteId,
+  editableRouteId,
+  draftRouteName,
+  seedControlPoints = [],
+  fareStops = [],
+  activeFareStopId,
+  fareStopDraftPoints = [],
+  fareStopLabels,
+  onFareStopDraftChange,
+  onFareStopMetrics,
   onRouteMetrics,
   onSaveWaypoints
 }: {
   routes: RouteConfig[];
   selectedRouteId?: string | null;
+  editableRouteId?: string | null;
+  draftRouteName?: string;
+  seedControlPoints?: LatLngPoint[];
+  fareStops?: RouteConfig[];
+  activeFareStopId?: string | null;
+  fareStopDraftPoints?: LatLngPoint[];
+  fareStopLabels?: { origin?: string; destination?: string };
+  onFareStopDraftChange?: (points: LatLngPoint[]) => void;
+  onFareStopMetrics?: (metrics: { distanceKm?: number; estimatedDurationMinutes?: number }) => void;
   onRouteMetrics?: (
     routeId: string,
     metrics: { distanceKm?: number; estimatedDurationMinutes?: number }
@@ -428,45 +515,39 @@ export function RoutePreviewMap({
     estimatedDurationMinutes?: number
   ) => Promise<void> | void;
 }) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const layerRef = useRef<LeafletLayer | null>(null);
   const editLayerRef = useRef<LeafletLayer | null>(null);
   const streetLayerRef = useRef<LeafletLayer | null>(null);
   const satelliteLayerRef = useRef<LeafletLayer | null>(null);
-  const trafficLayerRef = useRef<LeafletLayer | null>(null);
   const metricsCallbackRef = useRef<typeof onRouteMetrics>(onRouteMetrics);
 
   const [message, setMessage] = useState<string>("Showing saved waypoints.");
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [computedRoads, setComputedRoads] = useState<Record<string, LatLngPoint[]>>({});
-  const [computedRoadBaseSignatures, setComputedRoadBaseSignatures] = useState<
-    Record<string, string>
-  >({});
-  const [computedMetrics, setComputedMetrics] = useState<
-    Record<string, { distanceKm?: number; estimatedDurationMinutes?: number }>
-  >({});
-  const [computedMetricBaseSignatures, setComputedMetricBaseSignatures] = useState<
-    Record<string, string>
-  >({});
   const [viewMode, setViewMode] = useState<"street" | "satellite">("street");
-  const [isTrafficOn, setIsTrafficOn] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
   const [isEditing, setIsEditing] = useState(false);
-  const [editPoints, setEditPoints] = useState<LatLngPoint[]>([]);
+  const [controlPoints, setControlPoints] = useState<LatLngPoint[]>([]);
+  const [snappedPath, setSnappedPath] = useState<LatLngPoint[]>([]);
   const [editPointLabels, setEditPointLabels] = useState<string[]>([]);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [selectedFarePointIndex, setSelectedFarePointIndex] = useState<number | null>(null);
   const [draggedPointIndex, setDraggedPointIndex] = useState<number | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [pendingSearchPoint, setPendingSearchPoint] = useState<PendingSearchPoint | null>(null);
-  const [straightLineSave, setStraightLineSave] = useState<StraightLineSaveState | null>(null);
   const [fallbackWarning, setFallbackWarning] = useState<string | null>(null);
+  const [currentMetrics, setCurrentMetrics] = useState<{
+    distanceKm?: number;
+    estimatedDurationMinutes?: number;
+  }>({});
+
+  const isFareStopMapping = Boolean(onFareStopDraftChange && activeFareStopId);
 
   useEffect(() => {
     metricsCallbackRef.current = onRouteMetrics;
@@ -477,12 +558,7 @@ export function RoutePreviewMap({
       routes
         .map((route) => {
           const points = getRoutePoints(route);
-
-          return {
-            route,
-            points,
-            signature: getPointSignature(points)
-          };
+          return { route, points };
         })
         .filter((entry) => entry.points.length > 1 || entry.route.id === selectedRouteId),
     [routes, selectedRouteId]
@@ -490,13 +566,115 @@ export function RoutePreviewMap({
 
   const selectedRouteEntry = useMemo(() => {
     if (!visibleRoutes.length) return null;
-
     if (selectedRouteId) {
       return visibleRoutes.find((entry) => entry.route.id === selectedRouteId) || null;
     }
-
     return visibleRoutes[0];
   }, [selectedRouteId, visibleRoutes]);
+
+  const mainRoutePoints = useMemo(
+    () => selectedRouteEntry?.points || [],
+    [selectedRouteEntry]
+  );
+
+  const fareStopSegments = useMemo<FareStopSegment[]>(
+    () => {
+      if (mainRoutePoints.length < 2) return [];
+
+      const segments: FareStopSegment[] = [];
+
+      fareStops.forEach((route) => {
+        const anchors = getFareStopAnchors(route);
+        if (!anchors) return;
+
+        const snapped = routeSegmentBetween(mainRoutePoints, anchors[0], anchors[1]);
+
+        segments.push({
+          route,
+          anchors: snapped.anchors,
+          segment: snapped.segment,
+          distanceKm: calculateLineDistanceKm(snapped.segment)
+        });
+      });
+
+      return segments;
+    },
+    [fareStops, mainRoutePoints]
+  );
+
+  const activeFareStopSegment = useMemo(() => {
+    if (fareStopDraftPoints.length < 2 || mainRoutePoints.length < 2) return null;
+    return routeSegmentBetween(mainRoutePoints, fareStopDraftPoints[0], fareStopDraftPoints[1]);
+  }, [fareStopDraftPoints, mainRoutePoints]);
+
+  useEffect(() => {
+    if (!onFareStopMetrics) return;
+
+    if (!activeFareStopSegment || activeFareStopSegment.segment.length < 2) {
+      onFareStopMetrics({});
+      return;
+    }
+
+    const distanceKm = calculateLineDistanceKm(activeFareStopSegment.segment, mapRef.current);
+    onFareStopMetrics({
+      distanceKm,
+      estimatedDurationMinutes: estimateTrafficDurationMinutes(distanceKm)
+    });
+  }, [activeFareStopSegment, onFareStopMetrics]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+
+    if (controlPoints.length < 2) {
+      setSnappedPath(controlPoints);
+      setCurrentMetrics({});
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setIsCalculating(true);
+      setMessage("Snapping route to roads with OSRM...");
+
+      try {
+        const result = await fetchRoadGeometry(controlPoints);
+
+        setSnappedPath(result.points);
+        if (
+          result.snappedControlPoints?.length === controlPoints.length &&
+          !pointsAreNearlyEqual(result.snappedControlPoints, controlPoints)
+        ) {
+          setControlPoints(result.snappedControlPoints);
+          setEditPointLabels((previous) =>
+            previous.map((label, index) =>
+              label === formatPointLabel(controlPoints[index])
+                ? formatPointLabel(result.snappedControlPoints?.[index] || controlPoints[index])
+                : label
+            )
+          );
+        }
+        setFallbackWarning(result.warning || null);
+        setMessage(
+          result.isStraightLineFallback
+            ? "Road snap unavailable. Save is blocked until the road router responds."
+            : "Route is snapped to the road. Click or drag points to refine."
+        );
+
+        const distanceKm = result.distanceKm || calculateLineDistanceKm(result.points);
+        const estimatedDurationMinutes =
+          result.estimatedDurationMinutes || estimateTrafficDurationMinutes(distanceKm);
+
+        setCurrentMetrics({ distanceKm, estimatedDurationMinutes });
+      } catch {
+        setSnappedPath(controlPoints);
+        setFallbackWarning("Road API unavailable.");
+        setMessage("Road API unavailable. Showing straight lines.");
+      } finally {
+        setIsCalculating(false);
+      }
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [controlPoints, isEditing]);
 
   const updatePointLabelFromGeocode = useCallback((index: number, point: LatLngPoint) => {
     void reverseGeocodePoint(point)
@@ -514,73 +692,114 @@ export function RoutePreviewMap({
       .catch(() => undefined);
   }, [setEditPointLabels]);
 
-  const addEditPoint = useCallback((point: LatLngPoint, label?: string) => {
-    const nextIndex = editPoints.length;
-    const pointLabel = label || formatPointLabel(point);
+  const addEditPoint = useCallback(
+    (point: LatLngPoint, label?: string) => {
+      const nextIndex = controlPoints.length >= 2 ? controlPoints.length - 1 : controlPoints.length;
+      const pointLabel = label || formatPointLabel(point);
 
-    setEditPoints((previous) => [...previous, point]);
-    setEditPointLabels((previous) => [...previous, pointLabel]);
-    setSelectedPointIndex(nextIndex);
-    setShowClearConfirm(false);
-    setStraightLineSave(null);
-    setFallbackWarning(null);
+      setControlPoints((previous) => {
+        if (previous.length < 2) return [...previous, point];
+        const next = [...previous];
+        next.splice(next.length - 1, 0, point);
+        return next;
+      });
+      setEditPointLabels((previous) => {
+        if (previous.length < 2) return [...previous, pointLabel];
+        const next = [...previous];
+        next.splice(next.length - 1, 0, pointLabel);
+        return next;
+      });
+      setSelectedPointIndex(nextIndex);
+      setShowClearConfirm(false);
 
-    if (!label) {
-      updatePointLabelFromGeocode(nextIndex, point);
-    }
-  }, [
-    editPoints.length,
-    setEditPoints,
-    setEditPointLabels,
-    setSelectedPointIndex,
-    setShowClearConfirm,
-    setStraightLineSave,
-    setFallbackWarning,
-    updatePointLabelFromGeocode
-  ]);
+      if (!label) {
+        updatePointLabelFromGeocode(nextIndex, point);
+      }
+    },
+    [
+      controlPoints.length,
+      setControlPoints,
+      setEditPointLabels,
+      setSelectedPointIndex,
+      setShowClearConfirm,
+      updatePointLabelFromGeocode
+    ]
+  );
 
-  const updateEditPoint = useCallback((index: number, point: LatLngPoint) => {
-    setEditPoints((previous) => {
-      const next = [...previous];
-      next[index] = point;
-      return next;
-    });
-    setEditPointLabels((previous) => {
-      const next = [...previous];
-      next[index] = formatPointLabel(point);
-      return next;
-    });
-    setStraightLineSave(null);
-    setFallbackWarning(null);
-    updatePointLabelFromGeocode(index, point);
-  }, [
-    setEditPoints,
-    setEditPointLabels,
-    setStraightLineSave,
-    setFallbackWarning,
-    updatePointLabelFromGeocode
-  ]);
+  const setFareStopPoint = useCallback(
+    (point: LatLngPoint, index?: number) => {
+      if (!onFareStopDraftChange) return;
+
+      if (mainRoutePoints.length < 2) {
+        setMessage("Map the main blue route first before assigning fare stop A/B.");
+        return;
+      }
+
+      const snap = closestPointOnRoute(mainRoutePoints, point);
+      if (!snap) return;
+
+      if (snap.distanceMeters > MAX_FARE_STOP_SNAP_METERS) {
+        setMessage("Fare Stop Matrix points must be placed on or very near the blue main route.");
+        return;
+      }
+
+      const next = [...fareStopDraftPoints];
+
+      if (typeof index === "number") {
+        next[index] = snap.point;
+        setSelectedFarePointIndex(index);
+      } else if (next.length < 2) {
+        next.push(snap.point);
+        setSelectedFarePointIndex(next.length - 1);
+      } else {
+        next[1] = snap.point;
+        setSelectedFarePointIndex(1);
+      }
+
+      onFareStopDraftChange(next.slice(0, 2));
+      setMessage(
+        next.length >= 2
+          ? "Fare stop segment follows the blue main route only."
+          : "Point A set. Click the blue route again for point B."
+      );
+    },
+    [
+      fareStopDraftPoints,
+      mainRoutePoints,
+      onFareStopDraftChange,
+      setMessage,
+      setSelectedFarePointIndex
+    ]
+  );
+
+  const updateEditPoint = useCallback(
+    (index: number, point: LatLngPoint) => {
+      setControlPoints((previous) => {
+        const next = [...previous];
+        next[index] = point;
+        return next;
+      });
+      setEditPointLabels((previous) => {
+        const next = [...previous];
+        next[index] = formatPointLabel(point);
+        return next;
+      });
+      updatePointLabelFromGeocode(index, point);
+    },
+    [setControlPoints, setEditPointLabels, updatePointLabelFromGeocode]
+  );
 
   const removePointAtIndex = useCallback((index: number) => {
-    setEditPoints((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
+    setControlPoints((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
     setEditPointLabels((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
     setSelectedPointIndex(null);
     setShowClearConfirm(false);
-    setStraightLineSave(null);
-    setFallbackWarning(null);
-  }, [
-    setEditPoints,
-    setEditPointLabels,
-    setSelectedPointIndex,
-    setShowClearConfirm,
-    setStraightLineSave,
-    setFallbackWarning
-  ]);
+  }, [setControlPoints, setEditPointLabels, setSelectedPointIndex, setShowClearConfirm]);
 
   const reorderPoint = useCallback((fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
 
-    setEditPoints((previous) => {
+    setControlPoints((previous) => {
       const next = [...previous];
       const [moved] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, moved);
@@ -594,117 +813,18 @@ export function RoutePreviewMap({
     });
     setSelectedPointIndex(toIndex);
     setDraggedPointIndex(null);
-    setStraightLineSave(null);
-    setFallbackWarning(null);
   }, [
-    setEditPoints,
-    setEditPointLabels,
-    setSelectedPointIndex,
+    setControlPoints,
     setDraggedPointIndex,
-    setStraightLineSave,
-    setFallbackWarning
+    setEditPointLabels,
+    setSelectedPointIndex
   ]);
 
   const undoLastPoint = useCallback(() => {
-    if (!editPoints.length) return;
-    removePointAtIndex(editPoints.length - 1);
-    setMessage("Last route point removed.");
-  }, [editPoints.length, removePointAtIndex, setMessage]);
-
-  const recalculatePath = async () => {
-    const entry = selectedRouteEntry;
-
-    if (!entry) {
-      setMessage("No route selected to calculate.");
-      return;
-    }
-
-    const pointsToCalculate = isEditing && editPoints.length > 1 ? editPoints : entry.points;
-
-    if (pointsToCalculate.length < 2) {
-      setMessage("Add at least 2 map points before calculating a road path.");
-      return;
-    }
-
-    setIsCalculating(true);
-    setStraightLineSave(null);
-    setFallbackWarning(null);
-    setMessage("Calculating road path preview...");
-
-    try {
-      const result = await fetchRoadGeometry(pointsToCalculate);
-      const distanceKm =
-        result.distanceKm ?? calculateLineDistanceKm(result.points, mapRef.current);
-      const estimatedDurationMinutes =
-        result.estimatedDurationMinutes ?? estimateTrafficDurationMinutes(distanceKm);
-      const warning = result.warning || null;
-
-      setFallbackWarning(warning);
-
-      if (isEditing) {
-        setEditPoints(result.points);
-        setEditPointLabels(result.points.map(formatPointLabel));
-        setComputedMetricBaseSignatures((current) => ({
-          ...current,
-          [entry.route.id]: getPointSignature(result.points)
-        }));
-        setComputedMetrics((current) => ({
-          ...current,
-          [entry.route.id]: {
-            distanceKm,
-            estimatedDurationMinutes
-          }
-        }));
-        if (result.isStraightLineFallback) {
-          setStraightLineSave({
-            routeId: entry.route.id,
-            points: result.points,
-            distanceKm,
-            estimatedDurationMinutes
-          });
-          setMessage(result.warning || "Road path service unavailable. Review before saving.");
-        } else {
-          setMessage("Road path preview is ready. Review it, then click Save route path.");
-        }
-      } else {
-        setComputedRoads((current) => ({
-          ...current,
-          [entry.route.id]: result.points
-        }));
-        setComputedRoadBaseSignatures((current) => ({
-          ...current,
-          [entry.route.id]: entry.signature
-        }));
-        setComputedMetricBaseSignatures((current) => ({
-          ...current,
-          [entry.route.id]: entry.signature
-        }));
-        setComputedMetrics((current) => ({
-          ...current,
-          [entry.route.id]: {
-            distanceKm,
-            estimatedDurationMinutes
-          }
-        }));
-        metricsCallbackRef.current?.(entry.route.id, {
-          distanceKm,
-          estimatedDurationMinutes
-        });
-        setMessage(
-          result.warning ||
-            "Road path preview is ready. It will not replace saved waypoints until you save it."
-        );
-      }
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Road route service is unavailable right now. Your saved route was not changed."
-      );
-    } finally {
-      setIsCalculating(false);
-    }
-  };
+    if (controlPoints.length <= 2) return;
+    removePointAtIndex(controlPoints.length - 2);
+    setMessage("Last via point removed.");
+  }, [controlPoints.length, removePointAtIndex, setMessage]);
 
   const searchPlaces = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -743,11 +863,11 @@ export function RoutePreviewMap({
       setSearchResults(results);
       setMessage(
         results.length
-          ? "Select a search result to add it as a route point."
+          ? "Select a search result to place it on the map."
           : "No place found. Try a more specific place name."
       );
     } catch {
-      setMessage("Search is unavailable right now. You can still click the map to add points.");
+      setMessage("Search is unavailable right now. You can still click the map.");
     } finally {
       setIsSearching(false);
     }
@@ -766,7 +886,6 @@ export function RoutePreviewMap({
     const label = shortPlaceName(result.display_name);
 
     setPendingSearchPoint({ point, label });
-    setStraightLineSave(null);
     setFallbackWarning(null);
 
     const map = mapRef.current;
@@ -774,7 +893,7 @@ export function RoutePreviewMap({
       map.flyTo(point, 15);
     }
 
-    setMessage(`${label} selected. Confirm Add as waypoint on the map.`);
+    setMessage(`${label} selected. Confirm on the map.`);
     setSearchResults([]);
     setSearchQuery("");
   };
@@ -782,15 +901,75 @@ export function RoutePreviewMap({
   const confirmPendingSearchPoint = useCallback(() => {
     if (!pendingSearchPoint) return;
 
-    addEditPoint(pendingSearchPoint.point, pendingSearchPoint.label);
-    setMessage(`${pendingSearchPoint.label} added as a route waypoint.`);
+    if (isFareStopMapping) {
+      setFareStopPoint(pendingSearchPoint.point);
+      setMessage(`${pendingSearchPoint.label} snapped to the main route.`);
+    } else {
+      addEditPoint(pendingSearchPoint.point, pendingSearchPoint.label);
+      setMessage(`${pendingSearchPoint.label} added as a control point.`);
+    }
+
     setPendingSearchPoint(null);
-  }, [addEditPoint, pendingSearchPoint, setMessage, setPendingSearchPoint]);
+  }, [
+    addEditPoint,
+    isFareStopMapping,
+    pendingSearchPoint,
+    setFareStopPoint,
+    setMessage,
+    setPendingSearchPoint
+  ]);
 
   const cancelPendingSearchPoint = useCallback(() => {
     setPendingSearchPoint(null);
     setMessage("Search preview cancelled.");
   }, [setMessage, setPendingSearchPoint]);
+
+  const drawTerminalMarkers = useCallback((L: LeafletApi, target: LeafletLayerTarget) => {
+    MAIN_TERMINALS.forEach((terminal) => {
+      L.marker(terminal.position, {
+        icon: L.divIcon({
+          className: "route-config-terminal-icon-shell",
+          html: `
+            <div class="route-config-terminal-marker terminal-${terminal.id}">
+              <img src="${TERMINAL_ICON_ASSET}" alt="" />
+              <strong>${escapeHtml(terminal.label)}</strong>
+            </div>
+          `,
+          iconSize: [88, 78],
+          iconAnchor: [44, 56],
+          popupAnchor: [0, -44]
+        })
+      })
+        .addTo(target)
+        .bindPopup(
+          `<div class="leaflet-command-popup"><strong>${escapeHtml(terminal.name)}</strong><span>${escapeHtml(terminal.plusCode)}</span><p>${escapeHtml(terminal.address)}</p></div>`
+        );
+    });
+  }, []);
+
+  const ensureVisibleBaseLayer = useCallback(() => {
+    const map = mapRef.current;
+    const street = streetLayerRef.current;
+    const satellite = satelliteLayerRef.current;
+
+    if (!map || !street || !satellite) return;
+
+    const activateBaseLayer = (layer: LeafletLayer) => {
+      if (!map.hasLayer(layer)) layer.addTo(map);
+      layer.setZIndex?.(1);
+      layer.bringToBack?.();
+      layer.redraw?.();
+    };
+
+    if (viewMode === "satellite") {
+      if (map.hasLayer(street)) map.removeLayer(street);
+      activateBaseLayer(satellite);
+      return;
+    }
+
+    if (map.hasLayer(satellite)) map.removeLayer(satellite);
+    activateBaseLayer(street);
+  }, [viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -801,28 +980,34 @@ export function RoutePreviewMap({
 
         const map = L.map(containerRef.current, {
           zoomControl: false,
-          preferCanvas: true
+          preferCanvas: false,
+          fadeAnimation: false
         }).setView(DEFAULT_CENTER, 12);
 
         L.control.zoom({ position: "bottomright" }).addTo(map);
 
         streetLayerRef.current = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "(c) OpenStreetMap",
-          maxZoom: 19
+          attribution: "(c) OpenStreetMap contributors",
+          className: "route-map-base-tile-layer",
+          crossOrigin: true,
+          keepBuffer: 4,
+          maxZoom: 19,
+          updateWhenIdle: false,
+          zIndex: 1
         }).addTo(map);
 
         satelliteLayerRef.current = L.tileLayer(
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
           {
             attribution: "Tiles (c) Esri",
-            maxZoom: 19
+            className: "route-map-base-tile-layer",
+            crossOrigin: true,
+            keepBuffer: 4,
+            maxZoom: 19,
+            updateWhenIdle: false,
+            zIndex: 1
           }
         );
-
-        trafficLayerRef.current = L.tileLayer("https://mt0.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}", {
-          attribution: "Traffic layer",
-          maxZoom: 20
-        });
 
         mapRef.current = map;
 
@@ -836,15 +1021,29 @@ export function RoutePreviewMap({
   }, []);
 
   useEffect(() => {
+    ensureVisibleBaseLayer();
+    const map = mapRef.current;
+    if (!map) return;
+
+    const timer = window.setTimeout(() => map.invalidateSize({ animate: true }), 80);
+    return () => window.clearTimeout(timer);
+  }, [ensureVisibleBaseLayer]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
     const handleClick = (event: LeafletMapMouseEvent) => {
-      if (!isEditing) return;
-
       const { lat, lng } = event.latlng;
 
-      addEditPoint([lat, lng]);
+      if (isEditing) {
+        addEditPoint([lat, lng]);
+        return;
+      }
+
+      if (isFareStopMapping) {
+        setFareStopPoint([lat, lng]);
+      }
     };
 
     map.on("click", handleClick);
@@ -852,15 +1051,19 @@ export function RoutePreviewMap({
     return () => {
       map.off("click", handleClick);
     };
-  }, [addEditPoint, isEditing]);
+  }, [addEditPoint, isEditing, isFareStopMapping, setFareStopPoint]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const timer = window.setTimeout(() => map.invalidateSize({ animate: true }), 120);
+    ensureVisibleBaseLayer();
+    const timer = window.setTimeout(() => {
+      ensureVisibleBaseLayer();
+      map.invalidateSize({ animate: true });
+    }, 120);
     return () => window.clearTimeout(timer);
-  }, [isFullscreen, routes.length, selectedRouteId]);
+  }, [activeFareStopId, ensureVisibleBaseLayer, isFullscreen, routes.length, selectedRouteId]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -870,6 +1073,43 @@ export function RoutePreviewMap({
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === shellRef.current);
+      ensureVisibleBaseLayer();
+      window.setTimeout(() => {
+        ensureVisibleBaseLayer();
+        mapRef.current?.invalidateSize({ animate: true });
+      }, 120);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, [ensureVisibleBaseLayer]);
+
+  const toggleMapFullscreen = async () => {
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      } else {
+        await shell.requestFullscreen();
+        setIsFullscreen(true);
+      }
+    } catch {
+      setIsFullscreen((value) => !value);
+    } finally {
+      ensureVisibleBaseLayer();
+      window.setTimeout(() => {
+        ensureVisibleBaseLayer();
+        mapRef.current?.invalidateSize({ animate: true });
+      }, 160);
+    }
+  };
 
   useEffect(() => {
     if (!isEditing) return;
@@ -883,7 +1123,7 @@ export function RoutePreviewMap({
 
     window.addEventListener("keydown", handleUndoShortcut);
     return () => window.removeEventListener("keydown", handleUndoShortcut);
-  }, [isEditing, editPoints.length, undoLastPoint]);
+  }, [isEditing, undoLastPoint]);
 
   const toggleViewMode = (mode: "street" | "satellite") => {
     const map = mapRef.current;
@@ -904,32 +1144,13 @@ export function RoutePreviewMap({
     window.setTimeout(() => map.invalidateSize({ animate: true }), 80);
   };
 
-  const toggleTraffic = () => {
-    const map = mapRef.current;
-    const traffic = trafficLayerRef.current;
-
-    if (!map || !traffic) {
-      setMessage("Traffic layer is not configured yet.");
-      return;
-    }
-
-    if (isTrafficOn) {
-      if (map.hasLayer(traffic)) map.removeLayer(traffic);
-      setIsTrafficOn(false);
-      setMessage("Traffic layer hidden.");
-    } else {
-      traffic.addTo(map);
-      setIsTrafficOn(true);
-      setMessage("Traffic layer enabled if available in your area.");
-    }
-  };
-
   useEffect(() => {
     const map = mapRef.current;
     const L = (window as LeafletWindow).L;
     if (!map || !L) return;
 
     let cancelled = false;
+    ensureVisibleBaseLayer();
 
     if (layerRef.current) {
       map.removeLayer(layerRef.current);
@@ -945,10 +1166,12 @@ export function RoutePreviewMap({
       const editGroup = L.layerGroup().addTo(map);
       editLayerRef.current = editGroup;
 
-      if (editPoints.length > 1) {
-        L.polyline(editPoints, {
-          color: "#dc3d35",
-          weight: 5,
+      drawTerminalMarkers(L, editGroup);
+
+      if (snappedPath.length > 1) {
+        L.polyline(snappedPath, {
+          color: MAIN_ROUTE_COLOR,
+          weight: 7,
           opacity: 0.95,
           lineCap: "round",
           lineJoin: "round"
@@ -966,7 +1189,7 @@ export function RoutePreviewMap({
         })
           .addTo(editGroup)
           .bindPopup(
-            `<div class="search-preview-popup"><strong>${escapeHtml(pendingSearchPoint.label)}</strong><div><button type="button" data-route-preview-action="add">Add as waypoint</button><button type="button" data-route-preview-action="cancel">Cancel</button></div></div>`,
+            `<div class="search-preview-popup"><strong>${escapeHtml(pendingSearchPoint.label)}</strong><div><button type="button" data-route-preview-action="add">Add point</button><button type="button" data-route-preview-action="cancel">Cancel</button></div></div>`,
             { closeButton: false, autoClose: false, closeOnClick: false }
           );
 
@@ -986,13 +1209,13 @@ export function RoutePreviewMap({
         previewMarker.openPopup();
       }
 
-      editPoints.forEach((point, index) => {
+      controlPoints.forEach((point, index) => {
         const isSelected = index === selectedPointIndex;
-        const role = getMarkerRole(index, editPoints.length);
-        const label = index === 0 ? "Start" : index === editPoints.length - 1 ? "End" : `${index + 1}`;
+        const role = getMarkerRole(index, controlPoints.length);
+        const label = index === 0 ? "Start" : index === controlPoints.length - 1 ? "End" : `${index + 1}`;
 
         const marker = L.marker(point, {
-          draggable: true,
+          draggable: role === "waypoint",
           icon: L.divIcon({
             className: `edit-marker ${role} ${isSelected ? "selected" : ""}`,
             html: `<div class="edit-marker-label">${label}</div>`,
@@ -1008,15 +1231,20 @@ export function RoutePreviewMap({
 
         marker.on("dragend", (event: LeafletMarkerEvent) => {
           const nextPosition = event.target.getLatLng();
-
           updateEditPoint(index, [nextPosition.lat, nextPosition.lng]);
         });
       });
 
-      if (editPoints.length) {
-        map.fitBounds(editPoints, { padding: [42, 42], maxZoom: 15 });
-        window.setTimeout(() => map.invalidateSize({ animate: true }), 100);
+      const bounds = controlPoints.length ? controlPoints : seedControlPoints;
+      if (bounds.length) {
+        if (draggedPointIndex === null) {
+          map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
+        }
+      } else {
+        map.fitBounds(TERMINAL_BOUNDS, { padding: [42, 42], maxZoom: 11 });
       }
+
+      window.setTimeout(() => map.invalidateSize({ animate: true }), 100);
 
       return () => {
         cancelled = true;
@@ -1025,15 +1253,9 @@ export function RoutePreviewMap({
 
     const group = L.layerGroup().addTo(map);
     layerRef.current = group;
+    drawTerminalMarkers(L, group);
 
-    if (!visibleRoutes.length) {
-      setMessage("No route line yet. Add or sync waypoints to preview this route.");
-      map.setView(DEFAULT_CENTER, 12);
-      map.invalidateSize({ animate: true });
-      return;
-    }
-
-    const allBounds: LatLngPoint[] = [];
+    const allBounds: LatLngPoint[] = [...TERMINAL_BOUNDS];
     let drawnRouteCount = 0;
 
     for (const entry of visibleRoutes) {
@@ -1043,30 +1265,21 @@ export function RoutePreviewMap({
       const isSelected = selectedRouteId
         ? entry.route.id === selectedRouteId
         : visibleRoutes.length === 1;
-      const routeColor = getRouteColor(entry.route);
-      const previewRoadPoints =
-        computedRoadBaseSignatures[entry.route.id] === entry.signature
-          ? computedRoads[entry.route.id]
-          : undefined;
-      const previewMetrics =
-        computedMetricBaseSignatures[entry.route.id] === entry.signature
-          ? computedMetrics[entry.route.id]
-          : undefined;
-      const routePoints = previewRoadPoints || entry.points;
+      const routePoints = entry.points;
 
       if (routePoints.length < 2) continue;
       drawnRouteCount += 1;
 
       L.polyline(routePoints, {
-        color: routeColor,
-        weight: isSelected ? 8 : 3,
-        opacity: isSelected ? 1 : 0.18,
+        color: MAIN_ROUTE_COLOR,
+        weight: isSelected ? 8 : 4,
+        opacity: isSelected ? 1 : 0.24,
         lineCap: "round",
         lineJoin: "round"
       })
         .addTo(group)
         .bindPopup(
-          `<strong>${getRouteDisplayName(entry.route)}</strong><br/>${routePoints.length} saved route points`
+          `<strong>${escapeHtml(getRouteDisplayName(entry.route))}</strong><br/>Main route line<br/>${routePoints.length} saved road points`
         );
 
       routePoints.forEach((point) => allBounds.push(point));
@@ -1078,7 +1291,7 @@ export function RoutePreviewMap({
         L.marker(first, {
           icon: L.divIcon({
             className: "route-terminal-marker origin",
-            html: `<span>Start: ${normalizeRouteLabel(entry.route.origin || "Origin")}</span>`,
+            html: `<span>Start: ${escapeHtml(normalizeRouteLabel(entry.route.origin || "Origin"))}</span>`,
             iconSize: [170, 28],
             iconAnchor: [85, 14]
           })
@@ -1089,21 +1302,15 @@ export function RoutePreviewMap({
         L.marker(last, {
           icon: L.divIcon({
             className: "route-terminal-marker finish",
-            html: `<span>End: ${normalizeRouteLabel(entry.route.destination || "Destination")}</span>`,
+            html: `<span>End: ${escapeHtml(normalizeRouteLabel(entry.route.destination || "Destination"))}</span>`,
             iconSize: [170, 28],
             iconAnchor: [85, 14]
           })
         }).addTo(group);
       }
 
-      const distanceKm =
-        previewMetrics?.distanceKm ??
-        entry.route.distanceKm ??
-        entry.route.distance ??
-        calculateLineDistanceKm(routePoints, map);
-
+      const distanceKm = entry.route.distanceKm ?? entry.route.distance ?? calculateLineDistanceKm(routePoints, map);
       const estimatedDurationMinutes =
-        previewMetrics?.estimatedDurationMinutes ??
         entryRouteExtra.trafficDurationMinutes ??
         entry.route.estimatedDurationMinutes ??
         estimateTrafficDurationMinutes(distanceKm);
@@ -1114,13 +1321,114 @@ export function RoutePreviewMap({
       });
     }
 
+    fareStopSegments.forEach((fareStop) => {
+      const isActive = fareStop.route.id === activeFareStopId;
+
+      L.polyline(fareStop.segment, {
+        color: FARE_STOP_COLOR,
+        weight: isActive ? 7 : 5,
+        opacity: isActive ? 0.94 : 0.52,
+        lineCap: "round",
+        lineJoin: "round"
+      })
+        .addTo(group)
+        .bindPopup(
+          `<strong>${escapeHtml(normalizeRouteLabel(fareStop.route.origin))} to ${escapeHtml(normalizeRouteLabel(fareStop.route.destination))}</strong><br/>Fare Stop Matrix segment<br/>${fareStop.distanceKm || "Mapped"} km along main route`
+        );
+
+      fareStop.anchors.forEach((point, index) => {
+        L.marker(point, {
+          icon: L.divIcon({
+            className: `fare-stop-anchor-marker ${index === 0 ? "point-a" : "point-b"}`,
+            html: `<span>${index === 0 ? "A" : "B"}</span>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+          })
+        }).addTo(group);
+        allBounds.push(point);
+      });
+    });
+
+    if (activeFareStopSegment) {
+      L.polyline(activeFareStopSegment.segment, {
+        color: FARE_STOP_COLOR,
+        weight: 8,
+        opacity: 0.96,
+        lineCap: "round",
+        lineJoin: "round"
+      }).addTo(group);
+    }
+
+    if (isFareStopMapping) {
+      if (pendingSearchPoint) {
+        const previewMarker = L.marker(pendingSearchPoint.point, {
+          icon: L.divIcon({
+            className: "search-preview-marker",
+            html: `<div class="search-preview-dot"></div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17]
+          })
+        })
+          .addTo(group)
+          .bindPopup(
+            `<div class="search-preview-popup"><strong>${escapeHtml(pendingSearchPoint.label)}</strong><div><button type="button" data-route-preview-action="add">Set A/B</button><button type="button" data-route-preview-action="cancel">Cancel</button></div></div>`,
+            { closeButton: false, autoClose: false, closeOnClick: false }
+          );
+
+        previewMarker.on("popupopen", (event: LeafletPopupEvent) => {
+          const element = event.popup?.getElement?.();
+          const addButton = element?.querySelector('[data-route-preview-action="add"]');
+          const cancelButton = element?.querySelector('[data-route-preview-action="cancel"]');
+
+          if (addButton instanceof HTMLButtonElement) {
+            addButton.addEventListener("click", confirmPendingSearchPoint);
+          }
+          if (cancelButton instanceof HTMLButtonElement) {
+            cancelButton.addEventListener("click", cancelPendingSearchPoint);
+          }
+        });
+
+        previewMarker.openPopup();
+      }
+
+      fareStopDraftPoints.forEach((point, index) => {
+        const marker = L.marker(point, {
+          draggable: true,
+          icon: L.divIcon({
+            className: `fare-stop-anchor-marker draft ${index === 0 ? "point-a" : "point-b"} ${
+              selectedFarePointIndex === index ? "selected" : ""
+            }`,
+            html: `<span>${index === 0 ? "A" : "B"}</span>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 17]
+          })
+        }).addTo(group);
+
+        marker.on("click", (event: unknown) => {
+          L.DomEvent.stopPropagation(event);
+          setSelectedFarePointIndex(index);
+        });
+
+        marker.on("dragend", (event: LeafletMarkerEvent) => {
+          const nextPosition = event.target.getLatLng();
+          setFareStopPoint([nextPosition.lat, nextPosition.lng], index);
+        });
+
+        allBounds.push(point);
+      });
+    }
+
     if (!cancelled) {
-      if (allBounds.length) {
-        map.fitBounds(allBounds, { padding: [42, 42], maxZoom: 15 });
-        setMessage("Showing saved route path. Recalculate only if you want a new preview.");
-      } else if (drawnRouteCount === 0) {
-        setMessage("No saved route path yet. Use reference route path or Manual edit route to add points.");
-        map.setView(DEFAULT_CENTER, 12);
+      if (drawnRouteCount > 0 || fareStopSegments.length || fareStopDraftPoints.length) {
+        map.fitBounds(allBounds, { padding: [46, 46], maxZoom: 15 });
+        setMessage(
+          isFareStopMapping
+            ? "Click the blue route to set A and B. Purple line follows the main route only."
+            : "Showing saved main route and fare stop segments."
+        );
+      } else {
+        setMessage("No main route path yet. Click Map Custom Route to start from the terminals.");
+        map.fitBounds(TERMINAL_BOUNDS, { padding: [42, 42], maxZoom: 11 });
       }
 
       window.setTimeout(() => map.invalidateSize({ animate: true }), 180);
@@ -1130,171 +1438,95 @@ export function RoutePreviewMap({
       cancelled = true;
     };
   }, [
-    visibleRoutes,
-    selectedRouteId,
-    computedRoads,
-    computedRoadBaseSignatures,
-    computedMetrics,
-    computedMetricBaseSignatures,
-    isEditing,
-    editPoints,
-    confirmPendingSearchPoint,
+    activeFareStopId,
+    activeFareStopSegment,
     cancelPendingSearchPoint,
+    confirmPendingSearchPoint,
+    controlPoints,
+    drawTerminalMarkers,
+    draggedPointIndex,
+    fareStopDraftPoints,
+    fareStopSegments,
+    isEditing,
+    isFareStopMapping,
+    mainRoutePoints,
     pendingSearchPoint,
+    seedControlPoints,
+    selectedFarePointIndex,
     selectedPointIndex,
-    updateEditPoint
+    selectedRouteId,
+    setFareStopPoint,
+    snappedPath,
+    updateEditPoint,
+    visibleRoutes,
+    ensureVisibleBaseLayer
   ]);
 
   const toggleEditMode = () => {
     if (isEditing) {
       setIsEditing(false);
-      setEditPoints([]);
+      setControlPoints([]);
+      setSnappedPath([]);
       setEditPointLabels([]);
       setSelectedPointIndex(null);
       setSearchResults([]);
       setPendingSearchPoint(null);
       setShowClearConfirm(false);
-      setStraightLineSave(null);
       setFallbackWarning(null);
-      setMessage("Manual route editing cancelled.");
+      setMessage("Route editing cancelled.");
       return;
     }
 
-    let initialPoints: LatLngPoint[] = [];
+    const existingPoints = selectedRouteEntry?.points || [];
+    const initialPoints = existingPoints.length
+      ? sampleControlPoints(existingPoints)
+      : seedControlPoints;
 
-    if (selectedRouteEntry) {
-      const previewRoadPoints =
-        computedRoadBaseSignatures[selectedRouteEntry.route.id] === selectedRouteEntry.signature
-          ? computedRoads[selectedRouteEntry.route.id]
-          : undefined;
-
-      initialPoints = previewRoadPoints || selectedRouteEntry.points || [];
-    }
-
-    setEditPoints(initialPoints);
-    setEditPointLabels(initialPoints.map(formatPointLabel));
-    setSelectedPointIndex(null);
+    setControlPoints(initialPoints);
+    setSnappedPath(existingPoints.length ? existingPoints : initialPoints);
+    setEditPointLabels(initialPoints.map((point, index) => {
+      if (index === 0) return "Start terminal";
+      if (index === initialPoints.length - 1) return "End terminal";
+      return formatPointLabel(point);
+    }));
+    setSelectedPointIndex(initialPoints.length ? initialPoints.length - 1 : null);
     setPendingSearchPoint(null);
     setShowClearConfirm(false);
-    setStraightLineSave(null);
     setFallbackWarning(null);
     setIsEditing(true);
-    setMessage("Manual edit mode: click the map or search a place to add route points.");
-  };
-
-  const removeSelectedPoint = () => {
-    if (selectedPointIndex === null) return;
-
-    removePointAtIndex(selectedPointIndex);
+    setMessage(
+      existingPoints.length
+        ? "Editing saved route. Drag points or search places to adjust the road path."
+        : "Draft route started from terminal endpoints. Add points so OSRM follows the right roads."
+    );
   };
 
   const saveEditedPath = async () => {
-    if (!onSaveWaypoints) {
-      setMessage("Saving is not supported in this view.");
-      return;
-    }
+    const routeIdForSave = editableRouteId || selectedRouteId;
+    if (!onSaveWaypoints || !routeIdForSave) return;
 
-    const targetRouteId = selectedRouteEntry?.route.id;
-
-    if (!targetRouteId) {
-      setMessage("No route selected to save.");
-      return;
-    }
-
-    if (editPoints.length < 2) {
-      setMessage("Add at least 2 map points before saving.");
+    if (snappedPath.length < 2) {
+      setMessage("Add at least 2 map points on the road before saving.");
       return;
     }
 
     setIsSaving(true);
-    setStraightLineSave(null);
     setFallbackWarning(null);
-    setMessage("Snapping to road...");
+    setMessage("Saving road-snapped route path...");
 
     try {
-      const result = await fetchRoadGeometry(editPoints);
-      const distanceKm =
-        result.distanceKm ?? calculateLineDistanceKm(result.points, mapRef.current);
+      const distanceKm = currentMetrics.distanceKm || calculateLineDistanceKm(snappedPath, mapRef.current);
       const estimatedDurationMinutes =
-        result.estimatedDurationMinutes ?? estimateTrafficDurationMinutes(distanceKm);
+        currentMetrics.estimatedDurationMinutes || estimateTrafficDurationMinutes(distanceKm);
 
-      setEditPoints(result.points);
-      setEditPointLabels(result.points.map(formatPointLabel));
-
-      if (result.isStraightLineFallback) {
-        setStraightLineSave({
-          routeId: targetRouteId,
-          points: result.points,
-          distanceKm,
-          estimatedDurationMinutes
-        });
-        setFallbackWarning(result.warning || "Road path service unavailable. Save anyway?");
-        setMessage(result.warning || "Road path service unavailable. Save anyway?");
-        return;
-      }
-
-      await onSaveWaypoints(targetRouteId, result.points, distanceKm, estimatedDurationMinutes);
-
-      setComputedRoads((current) => ({
-        ...current,
-        [targetRouteId]: result.points
-      }));
-      setComputedRoadBaseSignatures((current) => ({
-        ...current,
-        [targetRouteId]: selectedRouteEntry?.signature || ""
-      }));
-
-      setComputedMetrics((current) => ({
-        ...current,
-        [targetRouteId]: {
-          distanceKm,
-          estimatedDurationMinutes
-        }
-      }));
-      setComputedMetricBaseSignatures((current) => ({
-        ...current,
-        [targetRouteId]: selectedRouteEntry?.signature || ""
-      }));
+      await onSaveWaypoints(routeIdForSave, snappedPath, distanceKm, estimatedDurationMinutes);
 
       setIsEditing(false);
       setSelectedPointIndex(null);
       setSearchResults([]);
       setPendingSearchPoint(null);
       setShowClearConfirm(false);
-      setMessage("Route path saved. Live Fleet Map will use this route.");
-    } catch {
-      setMessage("Could not save route path. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const saveStraightLineFallback = async () => {
-    if (!onSaveWaypoints || !straightLineSave) return;
-
-    setIsSaving(true);
-    setMessage("Saving straight-line route path...");
-
-    try {
-      await onSaveWaypoints(
-        straightLineSave.routeId,
-        straightLineSave.points,
-        straightLineSave.distanceKm,
-        straightLineSave.estimatedDurationMinutes
-      );
-
-      setComputedRoads((current) => ({
-        ...current,
-        [straightLineSave.routeId]: straightLineSave.points
-      }));
-      setStraightLineSave(null);
-      setFallbackWarning(null);
-      setIsEditing(false);
-      setSelectedPointIndex(null);
-      setSearchResults([]);
-      setPendingSearchPoint(null);
-      setShowClearConfirm(false);
-      setMessage("Straight-line route path saved. Review it again when road snapping is available.");
+      setMessage("Route path saved. Reverse direction will follow the same road path in reverse.");
     } catch {
       setMessage("Could not save route path. Please try again.");
     } finally {
@@ -1304,16 +1536,137 @@ export function RoutePreviewMap({
 
   const activeRouteName = selectedRouteEntry?.route
     ? getRouteDisplayName(selectedRouteEntry.route)
-    : "No route selected";
+    : draftRouteName || "New main route";
+
+  const showSearchPanel = isEditing || isFareStopMapping;
+  const canSaveRoute = isEditing && !isSaving && !isCalculating && snappedPath.length >= 2 && !fallbackWarning;
+  const viaPointCount = Math.max(controlPoints.length - 2, 0);
 
   return (
-    <div className={`route-preview-map-shell ${isFullscreen ? "is-fullscreen" : ""}`}>
+    <div ref={shellRef} className={`route-preview-map-shell ${isFullscreen ? "is-fullscreen" : ""}`}>
       <div
         ref={containerRef}
-        className={`route-preview-map-canvas ${isEditing ? "is-editing" : ""}`}
+        className={`route-preview-map-canvas ${isEditing || isFareStopMapping ? "is-editing" : ""}`}
       />
 
-      {isEditing ? (
+      <div className={`route-mapper-toolbar ${isEditing ? "is-plotting" : ""}`}>
+        <div className="route-mapper-toolbar-title">
+          <Map size={18} />
+          <strong>Route Mapper</strong>
+          <span>{isEditing ? `${viaPointCount} via points` : "Ready"}</span>
+        </div>
+
+        <div className="route-mapper-toolbar-actions">
+          {isEditing ? (
+            <>
+              <button
+                type="button"
+                className="route-toolbar-danger"
+                onClick={() => setShowClearConfirm(true)}
+                disabled={!controlPoints.length}
+              >
+                <X size={15} />
+                Clear plot
+              </button>
+
+              {showClearConfirm ? (
+                <span className="route-toolbar-confirm">
+                  Clear?
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setControlPoints(seedControlPoints);
+                      setSnappedPath(seedControlPoints);
+                      setEditPointLabels(seedControlPoints.map((_, index) =>
+                        index === 0 ? "Start terminal" : "End terminal"
+                      ));
+                      setSelectedPointIndex(seedControlPoints.length ? seedControlPoints.length - 1 : null);
+                      setSearchResults([]);
+                      setPendingSearchPoint(null);
+                      setShowClearConfirm(false);
+                      setFallbackWarning(null);
+                      setMessage("Plot cleared. Click the map to route through roads.");
+                    }}
+                  >
+                    Yes
+                  </button>
+                  <button type="button" onClick={() => setShowClearConfirm(false)}>
+                    No
+                  </button>
+                </span>
+              ) : null}
+
+              <button type="button" onClick={undoLastPoint} disabled={controlPoints.length <= 2}>
+                <Undo2 size={15} />
+                Undo
+              </button>
+
+              <button
+                type="button"
+                className="route-toolbar-primary"
+                onClick={saveEditedPath}
+                disabled={!canSaveRoute}
+              >
+                <Check size={16} />
+                {isSaving ? "Saving..." : isCalculating ? "Routing..." : "Finish plotting"}
+              </button>
+            </>
+          ) : onSaveWaypoints ? (
+            <button type="button" className="route-toolbar-primary" onClick={toggleEditMode}>
+              <Map size={16} />
+              Plot main route
+            </button>
+          ) : null}
+
+          {isEditing ? (
+            <button type="button" onClick={toggleEditMode}>
+              Cancel
+            </button>
+          ) : null}
+
+          <span className="route-toolbar-divider" />
+
+          <button
+            type="button"
+            className={viewMode === "street" ? "active" : ""}
+            onClick={() => toggleViewMode("street")}
+            title="Street map"
+          >
+            <Map size={15} />
+            Map
+          </button>
+
+          <button
+            type="button"
+            className={viewMode === "satellite" ? "active" : ""}
+            onClick={() => toggleViewMode("satellite")}
+            title="Satellite map"
+          >
+            <Satellite size={15} />
+            Sat
+          </button>
+
+          {!isFullscreen ? (
+            <button
+              type="button"
+              onClick={toggleMapFullscreen}
+              title="Fullscreen map"
+            >
+              <Maximize2 size={15} />
+              Fullscreen
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="route-preview-legend">
+        <span><i className="legend-main-route" /> Main route</span>
+        <span><i className="legend-fare-stop" /> Fare stop segment</span>
+        <span><i className="legend-terminal" /> Terminal</span>
+        <span><i className="legend-draft-point" /> Editable point</span>
+      </div>
+
+      {showSearchPanel ? (
         <div className="route-edit-search-panel">
           <form onSubmit={searchPlaces} className="route-edit-search-form">
             <input
@@ -1341,8 +1694,8 @@ export function RoutePreviewMap({
                   onClick={() => previewSearchResult(result)}
                 >
                   <strong>
-                    <Plus size={12} />
-                    Add as route point
+                    <Map size={12} />
+                    {isFareStopMapping ? "Use on main line" : "Use as route point"}
                   </strong>
                   <span>
                     {shortPlaceName(result.display_name)}
@@ -1353,7 +1706,15 @@ export function RoutePreviewMap({
           ) : null}
 
           <p>
-            Search is optional. You can still click the map or drag points manually.
+            {isFareStopMapping ? (
+              <>
+                <b>Fare Stop Matrix:</b> A and B snap to the blue main route only.
+              </>
+            ) : (
+              <>
+                <b>Auto-snap mode:</b> Click roads or search places. OSRM calculates the real street path.
+              </>
+            )}
           </p>
         </div>
       ) : null}
@@ -1361,13 +1722,13 @@ export function RoutePreviewMap({
       {isEditing ? (
         <aside className="route-waypoint-sidebar" aria-label="Manual route waypoint list">
           <header>
-            <strong>Waypoints</strong>
-            <span>{editPoints.length} points</span>
+            <strong>Control Points</strong>
+            <span>{controlPoints.length} points</span>
           </header>
 
-          {editPoints.length ? (
+          {controlPoints.length ? (
             <ol>
-              {editPoints.map((point, index) => (
+              {controlPoints.map((point, index) => (
                 <li
                   key={`${index}-${point[0].toFixed(5)}-${point[1].toFixed(5)}`}
                   className={index === selectedPointIndex ? "selected" : ""}
@@ -1382,7 +1743,7 @@ export function RoutePreviewMap({
                   }}
                 >
                   <GripVertical size={14} aria-hidden="true" />
-                  <span className={`waypoint-sequence ${getMarkerRole(index, editPoints.length)}`}>
+                  <span className={`waypoint-sequence ${getMarkerRole(index, controlPoints.length)}`}>
                     {index + 1}
                   </span>
                   <span className="waypoint-label">
@@ -1391,8 +1752,10 @@ export function RoutePreviewMap({
                   <button
                     type="button"
                     className="waypoint-remove-button"
+                    disabled={index === 0 || index === controlPoints.length - 1}
                     onClick={(event) => {
                       event.stopPropagation();
+                      if (index === 0 || index === controlPoints.length - 1) return;
                       removePointAtIndex(index);
                     }}
                   >
@@ -1403,7 +1766,7 @@ export function RoutePreviewMap({
               ))}
             </ol>
           ) : (
-            <p>No route points yet.</p>
+            <p>No control points yet. Click the map to start.</p>
           )}
         </aside>
       ) : null}
@@ -1418,69 +1781,56 @@ export function RoutePreviewMap({
         {fallbackWarning ? (
           <div className="route-fallback-warning" role="alert">
             <span>{fallbackWarning}</span>
-            {straightLineSave ? (
-              <>
-                <button type="button" className="soft-button" onClick={saveStraightLineFallback} disabled={isSaving}>
-                  Save straight-line
-                </button>
-                <button
-                  type="button"
-                  className="soft-button"
-                  onClick={() => {
-                    setStraightLineSave(null);
-                    setFallbackWarning(null);
-                    setMessage("Straight-line save cancelled.");
-                  }}
-                  disabled={isSaving}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : null}
           </div>
         ) : null}
 
         <div className="route-preview-action-row">
-          {isEditing ? (
+          {isFareStopMapping ? (
             <>
-              <span className="route-edit-point-count">
-                {editPoints.length} points
+              <span className="fare-stop-map-status">
+                {fareStopLabels?.origin || "A"} to {fareStopLabels?.destination || "B"} / {fareStopDraftPoints.length}/2 points
               </span>
-
               <button
                 type="button"
                 className="soft-button"
-                onClick={removeSelectedPoint}
-                disabled={selectedPointIndex === null}
+                onClick={() => {
+                  onFareStopDraftChange?.([]);
+                  setSelectedFarePointIndex(null);
+                  setMessage("Fare stop A/B cleared. Click the blue route to remap.");
+                }}
+                disabled={!fareStopDraftPoints.length}
               >
-                <Trash2 size={14} />
-                Delete point
+                Clear A/B
               </button>
+            </>
+          ) : null}
 
+          {isEditing ? (
+            <>
               <button
                 type="button"
                 className="soft-button"
                 onClick={() => setShowClearConfirm(true)}
-                disabled={!editPoints.length}
+                disabled={!controlPoints.length}
               >
                 Clear route
               </button>
 
               {showClearConfirm ? (
                 <span className="route-clear-confirm">
-                  Clear all {editPoints.length} points?
+                  Clear all points?
                   <button
                     type="button"
                     onClick={() => {
-                      setEditPoints([]);
+                      setControlPoints([]);
+                      setSnappedPath([]);
                       setEditPointLabels([]);
                       setSelectedPointIndex(null);
                       setSearchResults([]);
                       setPendingSearchPoint(null);
                       setShowClearConfirm(false);
-                      setStraightLineSave(null);
                       setFallbackWarning(null);
-                      setMessage("Unsaved route points cleared.");
+                      setMessage("Cleared. Ready to map a new route.");
                     }}
                   >
                     Confirm
@@ -1495,7 +1845,7 @@ export function RoutePreviewMap({
                 type="button"
                 className="soft-button"
                 onClick={undoLastPoint}
-                disabled={!editPoints.length}
+                disabled={controlPoints.length <= 2}
               >
                 <Undo2 size={14} />
                 Undo
@@ -1503,21 +1853,11 @@ export function RoutePreviewMap({
 
               <button
                 type="button"
-                className="soft-button"
-                onClick={recalculatePath}
-                disabled={isCalculating || isSaving || editPoints.length < 2}
-              >
-                <LocateFixed size={14} />
-                {isCalculating ? "Calculating..." : "Recalculate road path"}
-              </button>
-
-              <button
-                type="button"
                 className="soft-button primary-action"
                 onClick={saveEditedPath}
-                disabled={isSaving}
+                disabled={!canSaveRoute}
               >
-                {isSaving ? "Snapping..." : "Save route path"}
+                {isSaving ? "Saving map..." : isCalculating ? "Snapping..." : "Save Route Path"}
               </button>
 
               <button
@@ -1531,25 +1871,13 @@ export function RoutePreviewMap({
             </>
           ) : (
             <>
-              {visibleRoutes.length > 0 && onSaveWaypoints ? (
+              {onSaveWaypoints ? (
                 <button
                   type="button"
-                  className="soft-button"
+                  className="soft-button primary-action"
                   onClick={toggleEditMode}
                 >
-                  Manual edit route
-                </button>
-              ) : null}
-
-              {visibleRoutes.length > 0 ? (
-                <button
-                  type="button"
-                  className="soft-button"
-                  onClick={recalculatePath}
-                  disabled={isCalculating}
-                >
-                  <LocateFixed size={14} />
-                  {isCalculating ? "Calculating..." : "Recalculate road path"}
+                  Map Custom Route
                 </button>
               ) : null}
             </>
@@ -1577,20 +1905,12 @@ export function RoutePreviewMap({
 
           <button
             type="button"
-            className={`soft-button ${isTrafficOn ? "active" : ""}`}
-            onClick={toggleTraffic}
-            title={isTrafficOn ? "Traffic On" : "Traffic layer if available"}
-          >
-            <TrafficCone size={14} />
-          </button>
-
-          <button
-            type="button"
-            className="soft-button"
-            onClick={() => setIsFullscreen((value) => !value)}
-            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            className={`soft-button ${isFullscreen ? "active primary-action" : ""}`}
+            onClick={toggleMapFullscreen}
+            title={isFullscreen ? "Exit fullscreen" : "Fullscreen map"}
           >
             {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span style={{ marginLeft: 4 }}>{isFullscreen ? "Exit Fullscreen" : "Fullscreen"}</span>
           </button>
         </div>
       </div>
