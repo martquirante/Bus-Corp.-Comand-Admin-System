@@ -767,11 +767,9 @@ export const routeService = {
       actor
     );
 
-    try {
-      await supabaseService.syncRoute(updatedRoute);
-    } catch (error) {
+    void supabaseService.syncRoute(updatedRoute).catch((error) => {
       console.warn("[routes] Supabase route path sync skipped.", error);
-    }
+    });
 
     return updatedRoute;
   },

@@ -800,67 +800,72 @@ export function RouteConfigPage() {
               );
 
               try {
-                await api.updateRoutePath(targetRouteId, {
-                  routeName: selectedRouteSeed.routeName,
-                  origin: selectedRouteSeed.origin,
-                  destination: selectedRouteSeed.destination,
-                  direction,
-                  reverseRouteId: selectedRouteSeed.reverseRouteId,
-                  price: selectedRouteSeed.price,
-                  baseFare: selectedRouteSeed.price,
-                  isViceVersa: true,
-                  status: "active",
-                  waypoints,
-                  distanceKm,
-                  ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
-                  routeGeometrySource: "osrm",
-                  plannedByAdmin: true,
-                  lineId: selectedLineId,
-                  routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
-                });
+                const saveReverseRoute = async () => {
+                  if (!reverseRouteExists) {
+                    await api.createRoute({
+                      id: reverseSeed.id,
+                      routeId: reverseSeed.id,
+                      routeName: reverseSeed.routeName,
+                      origin: reverseSeed.origin,
+                      destination: reverseSeed.destination,
+                      direction: reverseDirection,
+                      lineId: reverseSeed.lineId,
+                      routeGroup: reverseSeed.routeGroup,
+                      price: reverseSeed.price,
+                      baseFare: reverseSeed.price,
+                      isViceVersa: true,
+                      reverseRouteId: reverseSeed.reverseRouteId,
+                      status: "active",
+                      stops: [],
+                      waypoints: []
+                    } as Omit<RouteConfig, "id"> & Record<string, unknown>);
+                  }
 
-                if (!reverseRouteExists) {
-                  await api.createRoute({
-                    id: reverseSeed.id,
-                    routeId: reverseSeed.id,
+                  return api.updateRoutePath(reverseSeed.id, {
                     routeName: reverseSeed.routeName,
                     origin: reverseSeed.origin,
                     destination: reverseSeed.destination,
                     direction: reverseDirection,
-                    lineId: reverseSeed.lineId,
-                    routeGroup: reverseSeed.routeGroup,
+                    reverseRouteId: reverseSeed.reverseRouteId,
                     price: reverseSeed.price,
                     baseFare: reverseSeed.price,
                     isViceVersa: true,
-                    reverseRouteId: reverseSeed.reverseRouteId,
                     status: "active",
-                    stops: [],
-                    waypoints: []
-                  } as Omit<RouteConfig, "id"> & Record<string, unknown>);
-                }
+                    waypoints: reverseWaypoints,
+                    distanceKm,
+                    ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
+                    routeGeometrySource: "osrm",
+                    plannedByAdmin: true,
+                    lineId: selectedLineId,
+                    routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
+                  });
+                };
 
-                await api.updateRoutePath(reverseSeed.id, {
-                  routeName: reverseSeed.routeName,
-                  origin: reverseSeed.origin,
-                  destination: reverseSeed.destination,
-                  direction: reverseDirection,
-                  reverseRouteId: reverseSeed.reverseRouteId,
-                  price: reverseSeed.price,
-                  baseFare: reverseSeed.price,
-                  isViceVersa: true,
-                  status: "active",
-                  waypoints: reverseWaypoints,
-                  distanceKm,
-                  ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
-                  routeGeometrySource: "osrm",
-                  plannedByAdmin: true,
-                  lineId: selectedLineId,
-                  routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
-                });
+                await Promise.all([
+                  api.updateRoutePath(targetRouteId, {
+                    routeName: selectedRouteSeed.routeName,
+                    origin: selectedRouteSeed.origin,
+                    destination: selectedRouteSeed.destination,
+                    direction,
+                    reverseRouteId: selectedRouteSeed.reverseRouteId,
+                    price: selectedRouteSeed.price,
+                    baseFare: selectedRouteSeed.price,
+                    isViceVersa: true,
+                    status: "active",
+                    waypoints,
+                    distanceKm,
+                    ...(estimatedDurationMinutes ? { estimatedDurationMinutes } : {}),
+                    routeGeometrySource: "osrm",
+                    plannedByAdmin: true,
+                    lineId: selectedLineId,
+                    routeGroup: selectedLineId === "fvr-pitx" ? "FVR_PITX" : "FVR_ST_CRUZ"
+                  }),
+                  saveReverseRoute()
+                ]);
 
                 setMessageIsError(false);
                 setMessage("Route path saved. Reverse direction was updated automatically.");
-                await routes.refresh();
+                void routes.refresh().catch(() => undefined);
                 if (isNewRoute) setSelectedRouteId(targetRouteId);
               } catch {
                 setMessageIsError(true);

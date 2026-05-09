@@ -14,6 +14,7 @@ import {
   Undo2,
   X
 } from "lucide-react";
+import { createSatelliteHybridTileLayer } from "@/utils/mapTiles";
 import { getRouteDisplayName, normalizeRouteLabel } from "@/utils/routeLines";
 import { MAIN_TERMINALS, TERMINAL_BOUNDS, TERMINAL_ICON_ASSET } from "@/utils/terminals";
 
@@ -46,7 +47,9 @@ type LeafletLayer = {
   addTo: (target: LeafletLayerTarget) => LeafletLayer;
   bindPopup: (content: string, options?: Record<string, unknown>) => LeafletLayer;
   bringToBack?: () => LeafletLayer;
+  on?: (event: string, handler: () => void) => LeafletLayer;
   redraw?: () => LeafletLayer;
+  setUrl?: (url: string, noRedraw?: boolean) => LeafletLayer;
   setZIndex?: (zIndex: number) => LeafletLayer;
 };
 
@@ -67,6 +70,11 @@ type LeafletMap = {
   invalidateSize: (options?: { animate?: boolean }) => void;
   distance?: (from: LatLngPoint, to: LatLngPoint) => number;
   getZoom?: () => number;
+  panBy: (offset: [number, number], options?: { animate?: boolean }) => LeafletMap;
+  dragging?: {
+    disable: () => void;
+    enable: () => void;
+  };
   hasLayer: (layer: LeafletLayer) => boolean;
   removeLayer: (layer: LeafletLayer) => void;
   on: (event: string, handler: (event: LeafletMapMouseEvent) => void) => void;
@@ -111,6 +119,26 @@ type SearchResult = {
   lon: string;
   type?: string;
   class?: string;
+  source?: "photon" | "nominatim";
+};
+
+type PhotonFeature = {
+  geometry?: {
+    coordinates?: [number, number];
+  };
+  properties?: {
+    osm_id?: number;
+    osm_type?: string;
+    name?: string;
+    street?: string;
+    city?: string;
+    district?: string;
+    county?: string;
+    state?: string;
+    country?: string;
+    countrycode?: string;
+    type?: string;
+  };
 };
 
 export type RoadGeometryResult = {
@@ -127,6 +155,11 @@ type PendingSearchPoint = {
   label: string;
 };
 
+type RightMousePanState = {
+  lastX: number;
+  lastY: number;
+};
+
 type FareStopSegment = {
   route: RouteConfig;
   anchors: [LatLngPoint, LatLngPoint];
@@ -141,6 +174,14 @@ const OPENROUTESERVICE_KEY = process.env.NEXT_PUBLIC_OPENROUTESERVICE_API_KEY;
 const MAIN_ROUTE_COLOR = "#0f7ad3";
 const FARE_STOP_COLOR = "#7c3aed";
 const MAX_FARE_STOP_SNAP_METERS = 300;
+const PHILIPPINES_BOUNDS = {
+  minLat: 4.4,
+  maxLat: 21.35,
+  minLng: 116.8,
+  maxLng: 127.8
+};
+const PHOTON_PHILIPPINES_BBOX = `${PHILIPPINES_BOUNDS.minLng},${PHILIPPINES_BOUNDS.minLat},${PHILIPPINES_BOUNDS.maxLng},${PHILIPPINES_BOUNDS.maxLat}`;
+const NOMINATIM_PHILIPPINES_VIEWBOX = `${PHILIPPINES_BOUNDS.minLng},${PHILIPPINES_BOUNDS.maxLat},${PHILIPPINES_BOUNDS.maxLng},${PHILIPPINES_BOUNDS.minLat}`;
 
 const asRouteExtra = (route: RouteConfig): RouteExtraFields => route as RouteExtraFields;
 
@@ -375,6 +416,165 @@ const shortPlaceName = (value: string) => {
 const formatPointLabel = ([lat, lng]: LatLngPoint) =>
   `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 
+const isPointInPhilippinesBounds = ([lat, lng]: LatLngPoint) =>
+  lat >= PHILIPPINES_BOUNDS.minLat &&
+  lat <= PHILIPPINES_BOUNDS.maxLat &&
+  lng >= PHILIPPINES_BOUNDS.minLng &&
+  lng <= PHILIPPINES_BOUNDS.maxLng;
+
+const stablePlaceId = (value: string) => {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+};
+
+const joinPlaceParts = (...parts: Array<string | undefined>) =>
+  parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .filter(
+      (part, index, list) =>
+        list.findIndex((candidate) => candidate.toLowerCase() === part.toLowerCase()) === index
+    )
+    .join(", ");
+
+const toPhotonSearchResult = (feature: PhotonFeature, index: number): SearchResult | null => {
+  const coordinates = feature.geometry?.coordinates;
+  const properties = feature.properties;
+  if (!coordinates || !properties) return null;
+
+  const [lng, lat] = coordinates;
+  const point: LatLngPoint = [lat, lng];
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !isPointInPhilippinesBounds(point)) {
+    return null;
+  }
+
+  if (properties.countrycode && properties.countrycode.toUpperCase() !== "PH") {
+    return null;
+  }
+
+  const displayName = joinPlaceParts(
+    properties.name || properties.street,
+    properties.street && properties.street !== properties.name ? properties.street : undefined,
+    properties.district,
+    properties.city || properties.county,
+    properties.state,
+    "Philippines"
+  );
+
+  if (!displayName) return null;
+
+  const idSource = `${properties.osm_type || "photon"}:${properties.osm_id || index}:${displayName}:${lat}:${lng}`;
+
+  return {
+    place_id: stablePlaceId(idSource),
+    display_name: displayName,
+    lat: String(lat),
+    lon: String(lng),
+    type: properties.type,
+    class: properties.osm_type,
+    source: "photon"
+  };
+};
+
+const uniqueSearchResults = (results: SearchResult[]) => {
+  const seen = new Set<string>();
+
+  return results.filter((result) => {
+    const key = `${Number(result.lat).toFixed(5)}:${Number(result.lon).toFixed(5)}:${result.display_name.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const fetchPhotonPhilippinesResults = async (query: string, signal?: AbortSignal) => {
+  const params = new URLSearchParams({
+    q: query,
+    limit: "10",
+    lang: "en",
+    bbox: PHOTON_PHILIPPINES_BBOX
+  });
+
+  const response = await fetch(`https://photon.komoot.io/api/?${params.toString()}`, {
+    headers: {
+      Accept: "application/json"
+    },
+    signal
+  });
+
+  if (!response.ok) throw new Error("Photon search is unavailable.");
+
+  const json = (await response.json()) as { features?: PhotonFeature[] };
+
+  return uniqueSearchResults(
+    (json.features || [])
+      .map((feature, index) => toPhotonSearchResult(feature, index))
+      .filter((result): result is SearchResult => Boolean(result))
+  );
+};
+
+const fetchNominatimPhilippinesResults = async (query: string, signal?: AbortSignal) => {
+  const params = new URLSearchParams({
+    format: "jsonv2",
+    q: `${query}, Philippines`,
+    limit: "8",
+    addressdetails: "1",
+    countrycodes: "ph",
+    viewbox: NOMINATIM_PHILIPPINES_VIEWBOX,
+    bounded: "1",
+    dedupe: "1",
+    "accept-language": "en"
+  });
+
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+    headers: {
+      Accept: "application/json"
+    },
+    signal
+  });
+
+  if (!response.ok) throw new Error("Nominatim search is unavailable.");
+
+  const results = (await response.json()) as SearchResult[];
+
+  return uniqueSearchResults(
+    results
+      .map((result) => ({ ...result, source: "nominatim" as const }))
+      .filter((result) => {
+        const point: LatLngPoint = [Number(result.lat), Number(result.lon)];
+        return Number.isFinite(point[0]) && Number.isFinite(point[1]) && isPointInPhilippinesBounds(point);
+      })
+  );
+};
+
+const fetchPhilippinesSearchResults = async (
+  query: string,
+  signal?: AbortSignal,
+  options: { fallbackToNominatim?: boolean } = {}
+) => {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < 2) return [];
+  const { fallbackToNominatim = true } = options;
+
+  try {
+    const photonResults = await fetchPhotonPhilippinesResults(normalizedQuery, signal);
+    if (photonResults.length) return photonResults;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (!fallbackToNominatim) return [];
+  }
+
+  if (!fallbackToNominatim) return [];
+
+  return fetchNominatimPhilippinesResults(normalizedQuery, signal);
+};
+
 const pointsAreNearlyEqual = (left: LatLngPoint[], right: LatLngPoint[]) =>
   left.length === right.length &&
   left.every((point, index) => haversineMeters(point, right[index]) < 1.5);
@@ -523,12 +723,16 @@ export function RoutePreviewMap({
   const streetLayerRef = useRef<LeafletLayer | null>(null);
   const satelliteLayerRef = useRef<LeafletLayer | null>(null);
   const metricsCallbackRef = useRef<typeof onRouteMetrics>(onRouteMetrics);
+  const rightMousePanRef = useRef<RightMousePanState | null>(null);
+  const shouldAutoFitEditRef = useRef(false);
+  const routeViewportFitKeyRef = useRef<string | null>(null);
 
   const [message, setMessage] = useState<string>("Showing saved waypoints.");
   const [isCalculating, setIsCalculating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [viewMode, setViewMode] = useState<"street" | "satellite">("street");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isRightMousePanning, setIsRightMousePanning] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [controlPoints, setControlPoints] = useState<LatLngPoint[]>([]);
   const [snappedPath, setSnappedPath] = useState<LatLngPoint[]>([]);
@@ -537,6 +741,10 @@ export function RoutePreviewMap({
   const [selectedFarePointIndex, setSelectedFarePointIndex] = useState<number | null>(null);
   const [draggedPointIndex, setDraggedPointIndex] = useState<number | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [saveConfirmation, setSaveConfirmation] = useState<{
+    title: string;
+    detail: string;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -548,10 +756,18 @@ export function RoutePreviewMap({
   }>({});
 
   const isFareStopMapping = Boolean(onFareStopDraftChange && activeFareStopId);
+  const isSearchPanelActive = isEditing || isFareStopMapping;
 
   useEffect(() => {
     metricsCallbackRef.current = onRouteMetrics;
   }, [onRouteMetrics]);
+
+  useEffect(() => {
+    if (!saveConfirmation) return;
+
+    const timer = window.setTimeout(() => setSaveConfirmation(null), 5200);
+    return () => window.clearTimeout(timer);
+  }, [saveConfirmation]);
 
   const visibleRoutes = useMemo(
     () =>
@@ -774,6 +990,12 @@ export function RoutePreviewMap({
 
   const updateEditPoint = useCallback(
     (index: number, point: LatLngPoint) => {
+      if (index <= 0 || index >= controlPoints.length - 1) {
+        setSelectedPointIndex(index);
+        setMessage("Start and end terminals are locked. Move the via-points between them.");
+        return;
+      }
+
       setControlPoints((previous) => {
         const next = [...previous];
         next[index] = point;
@@ -785,16 +1007,42 @@ export function RoutePreviewMap({
         return next;
       });
       updatePointLabelFromGeocode(index, point);
+      setFallbackWarning(null);
+      setMessage(`Point ${index + 1} moved. Re-snapping route to roads.`);
     },
-    [setControlPoints, setEditPointLabels, updatePointLabelFromGeocode]
+    [
+      controlPoints.length,
+      setControlPoints,
+      setEditPointLabels,
+      setFallbackWarning,
+      setMessage,
+      setSelectedPointIndex,
+      updatePointLabelFromGeocode
+    ]
   );
 
   const removePointAtIndex = useCallback((index: number) => {
+    if (index <= 0 || index >= controlPoints.length - 1) {
+      setSelectedPointIndex(index);
+      setMessage("Start and end terminals are required and cannot be deleted.");
+      return;
+    }
+
     setControlPoints((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
     setEditPointLabels((previous) => previous.filter((_, pointIndex) => pointIndex !== index));
     setSelectedPointIndex(null);
     setShowClearConfirm(false);
-  }, [setControlPoints, setEditPointLabels, setSelectedPointIndex, setShowClearConfirm]);
+    setFallbackWarning(null);
+    setMessage(`Point ${index + 1} deleted. Route is re-snapping to roads.`);
+  }, [
+    controlPoints.length,
+    setControlPoints,
+    setEditPointLabels,
+    setFallbackWarning,
+    setMessage,
+    setSelectedPointIndex,
+    setShowClearConfirm
+  ]);
 
   const reorderPoint = useCallback((fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
@@ -826,6 +1074,48 @@ export function RoutePreviewMap({
     setMessage("Last via point removed.");
   }, [controlPoints.length, removePointAtIndex, setMessage]);
 
+  useEffect(() => {
+    if (!isSearchPanelActive) return;
+
+    const query = searchQuery.trim();
+
+    if (query.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsSearching(true);
+
+      try {
+        const results = await fetchPhilippinesSearchResults(query, controller.signal, {
+          fallbackToNominatim: false
+        });
+
+        setSearchResults(results);
+        setMessage(
+          results.length
+            ? "Philippines suggestions ready. Select one to preview it on the map."
+            : "No Philippines place found yet. Keep typing a more specific street or place."
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+
+        setSearchResults([]);
+        setMessage("Place suggestions are unavailable right now. You can still click the map.");
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false);
+      }
+    }, 420);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isSearchPanelActive, searchQuery, setMessage, setSearchResults]);
+
   const searchPlaces = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
 
@@ -841,30 +1131,13 @@ export function RoutePreviewMap({
     setMessage("Searching place...");
 
     try {
-      const params = new URLSearchParams({
-        format: "json",
-        q: `${query}, Philippines`,
-        limit: "6",
-        addressdetails: "1"
-      });
-
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
-        headers: {
-          Accept: "application/json"
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error("Search is unavailable right now.");
-      }
-
-      const results = (await response.json()) as SearchResult[];
+      const results = await fetchPhilippinesSearchResults(query);
 
       setSearchResults(results);
       setMessage(
         results.length
-          ? "Select a search result to place it on the map."
-          : "No place found. Try a more specific place name."
+          ? "Select a Philippines search result to place it on the map."
+          : "No Philippines place found. Try a more specific street, barangay, city, or landmark."
       );
     } catch {
       setMessage("Search is unavailable right now. You can still click the map.");
@@ -883,6 +1156,12 @@ export function RoutePreviewMap({
     }
 
     const point: LatLngPoint = [lat, lng];
+
+    if (!isPointInPhilippinesBounds(point)) {
+      setMessage("Only Philippines places can be used in Route Config search.");
+      return;
+    }
+
     const label = shortPlaceName(result.display_name);
 
     setPendingSearchPoint({ point, label });
@@ -996,18 +1275,13 @@ export function RoutePreviewMap({
           zIndex: 1
         }).addTo(map);
 
-        satelliteLayerRef.current = L.tileLayer(
-          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-          {
-            attribution: "Tiles (c) Esri",
-            className: "route-map-base-tile-layer",
-            crossOrigin: true,
-            keepBuffer: 4,
-            maxZoom: 19,
-            updateWhenIdle: false,
-            zIndex: 1
-          }
-        );
+        satelliteLayerRef.current = createSatelliteHybridTileLayer<LeafletLayer>(L, {
+          className: "route-map-base-tile-layer",
+          crossOrigin: true,
+          keepBuffer: 4,
+          updateWhenIdle: false,
+          zIndex: 1
+        });
 
         mapRef.current = map;
 
@@ -1052,6 +1326,94 @@ export function RoutePreviewMap({
       map.off("click", handleClick);
     };
   }, [addEditPoint, isEditing, isFareStopMapping, setFareStopPoint]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const container = containerRef.current;
+    const rightMousePanEnabled = isEditing || isFareStopMapping;
+
+    if (!map || !container || !rightMousePanEnabled) {
+      rightMousePanRef.current = null;
+      setIsRightMousePanning(false);
+      return;
+    }
+
+    const activeMap = map;
+
+    const isControlTarget = (target: EventTarget | null) =>
+      target instanceof Element &&
+      Boolean(target.closest(".leaflet-control, button, input, textarea, select, a"));
+
+    const stopRightMousePan = (event?: Event) => {
+      if (!rightMousePanRef.current) return;
+
+      event?.preventDefault();
+      event?.stopPropagation();
+      rightMousePanRef.current = null;
+      setIsRightMousePanning(false);
+      activeMap.dragging?.enable();
+      document.removeEventListener("mousemove", handleMouseMove, true);
+      document.removeEventListener("mouseup", handleMouseUp, true);
+      window.removeEventListener("blur", stopRightMousePan);
+    };
+
+    function handleMouseMove(event: MouseEvent) {
+      const panState = rightMousePanRef.current;
+      if (!panState) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const offsetX = panState.lastX - event.clientX;
+      const offsetY = panState.lastY - event.clientY;
+
+      if (offsetX !== 0 || offsetY !== 0) {
+        activeMap.panBy([offsetX, offsetY], { animate: false });
+        panState.lastX = event.clientX;
+        panState.lastY = event.clientY;
+      }
+    }
+
+    function handleMouseUp(event: MouseEvent) {
+      if (event.button === 2) stopRightMousePan(event);
+    }
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 2 || isControlTarget(event.target)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      rightMousePanRef.current = {
+        lastX: event.clientX,
+        lastY: event.clientY
+      };
+      setIsRightMousePanning(true);
+      activeMap.dragging?.disable();
+      document.addEventListener("mousemove", handleMouseMove, true);
+      document.addEventListener("mouseup", handleMouseUp, true);
+      window.addEventListener("blur", stopRightMousePan);
+    };
+
+    const handleContextMenu = (event: MouseEvent) => {
+      if (isControlTarget(event.target)) return;
+      event.preventDefault();
+    };
+
+    container.addEventListener("mousedown", handleMouseDown, true);
+    container.addEventListener("contextmenu", handleContextMenu, true);
+
+    return () => {
+      container.removeEventListener("mousedown", handleMouseDown, true);
+      container.removeEventListener("contextmenu", handleContextMenu, true);
+      document.removeEventListener("mousemove", handleMouseMove, true);
+      document.removeEventListener("mouseup", handleMouseUp, true);
+      window.removeEventListener("blur", stopRightMousePan);
+      rightMousePanRef.current = null;
+      setIsRightMousePanning(false);
+      activeMap.dragging?.enable();
+    };
+  }, [isEditing, isFareStopMapping]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1114,16 +1476,31 @@ export function RoutePreviewMap({
   useEffect(() => {
     if (!isEditing) return;
 
-    const handleUndoShortcut = (event: KeyboardEvent) => {
+    const handleEditShortcut = (event: KeyboardEvent) => {
+      const target = event.target;
+      const isTypingTarget =
+        target instanceof HTMLElement &&
+        Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+
+      if (isTypingTarget) return;
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
         event.preventDefault();
         undoLastPoint();
+        return;
+      }
+
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (selectedPointIndex === null) return;
+
+        event.preventDefault();
+        removePointAtIndex(selectedPointIndex);
       }
     };
 
-    window.addEventListener("keydown", handleUndoShortcut);
-    return () => window.removeEventListener("keydown", handleUndoShortcut);
-  }, [isEditing, undoLastPoint]);
+    window.addEventListener("keydown", handleEditShortcut);
+    return () => window.removeEventListener("keydown", handleEditShortcut);
+  }, [isEditing, removePointAtIndex, selectedPointIndex, undoLastPoint]);
 
   const toggleViewMode = (mode: "street" | "satellite") => {
     const map = mapRef.current;
@@ -1213,20 +1590,56 @@ export function RoutePreviewMap({
         const isSelected = index === selectedPointIndex;
         const role = getMarkerRole(index, controlPoints.length);
         const label = index === 0 ? "Start" : index === controlPoints.length - 1 ? "End" : `${index + 1}`;
+        const canEditPoint = role === "waypoint";
+        const pointName = canEditPoint ? `Control point ${index + 1}` : `${label} terminal`;
+        const pointLabel = editPointLabels[index] || formatPointLabel(point);
 
         const marker = L.marker(point, {
-          draggable: role === "waypoint",
+          draggable: canEditPoint,
           icon: L.divIcon({
             className: `edit-marker ${role} ${isSelected ? "selected" : ""}`,
             html: `<div class="edit-marker-label">${label}</div>`,
             iconSize: [38, 32],
             iconAnchor: [19, 16]
           })
-        }).addTo(editGroup);
+        })
+          .addTo(editGroup)
+          .bindPopup(
+            `<div class="edit-point-popup"><strong>${escapeHtml(pointName)}</strong><span>${escapeHtml(
+              pointLabel
+            )}</span><p>${
+              canEditPoint
+                ? "Drag this point to update the path. OSRM will snap it back to roads."
+                : "Terminal endpoints are locked for route direction and reverse logic."
+            }</p>${
+              canEditPoint
+                ? '<button type="button" data-edit-point-action="remove">Delete point</button>'
+                : ""
+            }</div>`,
+            { closeButton: true, autoClose: true, closeOnClick: false }
+          );
 
         marker.on("click", (event: unknown) => {
           L.DomEvent.stopPropagation(event);
           setSelectedPointIndex(index);
+          marker.openPopup();
+        });
+
+        marker.on("popupopen", (event: LeafletPopupEvent) => {
+          const element = event.popup?.getElement?.();
+          const removeButton = element?.querySelector('[data-edit-point-action="remove"]');
+
+          if (removeButton instanceof HTMLButtonElement) {
+            removeButton.onclick = (buttonEvent) => {
+              buttonEvent.preventDefault();
+              removePointAtIndex(index);
+            };
+          }
+        });
+
+        marker.on("dragstart", () => {
+          setSelectedPointIndex(index);
+          setMessage(`Moving point ${index + 1}. Release it and the route will snap to roads.`);
         });
 
         marker.on("dragend", (event: LeafletMarkerEvent) => {
@@ -1236,12 +1649,12 @@ export function RoutePreviewMap({
       });
 
       const bounds = controlPoints.length ? controlPoints : seedControlPoints;
-      if (bounds.length) {
-        if (draggedPointIndex === null) {
-          map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
-        }
-      } else {
+      if (bounds.length && shouldAutoFitEditRef.current) {
+        map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
+        shouldAutoFitEditRef.current = false;
+      } else if (!bounds.length && shouldAutoFitEditRef.current) {
         map.fitBounds(TERMINAL_BOUNDS, { padding: [42, 42], maxZoom: 11 });
+        shouldAutoFitEditRef.current = false;
       }
 
       window.setTimeout(() => map.invalidateSize({ animate: true }), 100);
@@ -1419,8 +1832,26 @@ export function RoutePreviewMap({
     }
 
     if (!cancelled) {
+      const visibleRouteFitKey = visibleRoutes
+        .map((entry) => `${entry.route.id}:${entry.points.length}`)
+        .join("|");
+      const fareStopFitKey = fareStopSegments
+        .map((fareStop) => `${fareStop.route.id}:${fareStop.segment.length}`)
+        .join("|");
+      const routeViewportFitKey = [
+        isFareStopMapping ? "fare-stop" : "routes",
+        selectedRouteId || "all",
+        activeFareStopId || "none",
+        visibleRouteFitKey,
+        fareStopFitKey
+      ].join(":");
+      const shouldAutoFitRouteView = routeViewportFitKeyRef.current !== routeViewportFitKey;
+
       if (drawnRouteCount > 0 || fareStopSegments.length || fareStopDraftPoints.length) {
-        map.fitBounds(allBounds, { padding: [46, 46], maxZoom: 15 });
+        if (shouldAutoFitRouteView) {
+          map.fitBounds(allBounds, { padding: [46, 46], maxZoom: 15 });
+          routeViewportFitKeyRef.current = routeViewportFitKey;
+        }
         setMessage(
           isFareStopMapping
             ? "Click the blue route to set A and B. Purple line follows the main route only."
@@ -1428,7 +1859,10 @@ export function RoutePreviewMap({
         );
       } else {
         setMessage("No main route path yet. Click Map Custom Route to start from the terminals.");
-        map.fitBounds(TERMINAL_BOUNDS, { padding: [42, 42], maxZoom: 11 });
+        if (shouldAutoFitRouteView) {
+          map.fitBounds(TERMINAL_BOUNDS, { padding: [42, 42], maxZoom: 11 });
+          routeViewportFitKeyRef.current = routeViewportFitKey;
+        }
       }
 
       window.setTimeout(() => map.invalidateSize({ animate: true }), 180);
@@ -1445,12 +1879,14 @@ export function RoutePreviewMap({
     controlPoints,
     drawTerminalMarkers,
     draggedPointIndex,
+    editPointLabels,
     fareStopDraftPoints,
     fareStopSegments,
     isEditing,
     isFareStopMapping,
     mainRoutePoints,
     pendingSearchPoint,
+    removePointAtIndex,
     seedControlPoints,
     selectedFarePointIndex,
     selectedPointIndex,
@@ -1464,6 +1900,7 @@ export function RoutePreviewMap({
 
   const toggleEditMode = () => {
     if (isEditing) {
+      shouldAutoFitEditRef.current = false;
       setIsEditing(false);
       setControlPoints([]);
       setSnappedPath([]);
@@ -1473,6 +1910,7 @@ export function RoutePreviewMap({
       setPendingSearchPoint(null);
       setShowClearConfirm(false);
       setFallbackWarning(null);
+      setSaveConfirmation(null);
       setMessage("Route editing cancelled.");
       return;
     }
@@ -1493,6 +1931,7 @@ export function RoutePreviewMap({
     setPendingSearchPoint(null);
     setShowClearConfirm(false);
     setFallbackWarning(null);
+    shouldAutoFitEditRef.current = true;
     setIsEditing(true);
     setMessage(
       existingPoints.length
@@ -1501,16 +1940,44 @@ export function RoutePreviewMap({
     );
   };
 
+  const getSaveValidationMessage = () => {
+    const routeIdForSave = editableRouteId || selectedRouteId;
+
+    if (!onSaveWaypoints || !routeIdForSave) {
+      return "Select a route line before saving the route path.";
+    }
+
+    if (controlPoints.length < 2) {
+      return "Keep a start terminal and end terminal before saving.";
+    }
+
+    if (isCalculating) {
+      return "Wait for OSRM to finish snapping the route to roads.";
+    }
+
+    if (fallbackWarning) {
+      return "Cannot save yet. The route must be snapped to real roads first.";
+    }
+
+    if (snappedPath.length < 2) {
+      return "Add or move map points until a road-snapped route is visible.";
+    }
+
+    return null;
+  };
+
   const saveEditedPath = async () => {
     const routeIdForSave = editableRouteId || selectedRouteId;
     if (!onSaveWaypoints || !routeIdForSave) return;
 
-    if (snappedPath.length < 2) {
-      setMessage("Add at least 2 map points on the road before saving.");
+    const validationMessage = getSaveValidationMessage();
+    if (validationMessage) {
+      setMessage(validationMessage);
       return;
     }
 
     setIsSaving(true);
+    setSaveConfirmation(null);
     setFallbackWarning(null);
     setMessage("Saving road-snapped route path...");
 
@@ -1526,6 +1993,10 @@ export function RoutePreviewMap({
       setSearchResults([]);
       setPendingSearchPoint(null);
       setShowClearConfirm(false);
+      setSaveConfirmation({
+        title: "Route path saved",
+        detail: `${activeRouteName} is saved with ${snappedPath.length} road points. Reverse direction was updated.`
+      });
       setMessage("Route path saved. Reverse direction will follow the same road path in reverse.");
     } catch {
       setMessage("Could not save route path. Please try again.");
@@ -1538,16 +2009,36 @@ export function RoutePreviewMap({
     ? getRouteDisplayName(selectedRouteEntry.route)
     : draftRouteName || "New main route";
 
-  const showSearchPanel = isEditing || isFareStopMapping;
-  const canSaveRoute = isEditing && !isSaving && !isCalculating && snappedPath.length >= 2 && !fallbackWarning;
+  const showSearchPanel = isSearchPanelActive;
+  const saveValidationMessage = isEditing ? getSaveValidationMessage() : null;
+  const canSaveRoute = isEditing && !isSaving && !saveValidationMessage;
   const viaPointCount = Math.max(controlPoints.length - 2, 0);
 
   return (
     <div ref={shellRef} className={`route-preview-map-shell ${isFullscreen ? "is-fullscreen" : ""}`}>
       <div
         ref={containerRef}
-        className={`route-preview-map-canvas ${isEditing || isFareStopMapping ? "is-editing" : ""}`}
+        className={`route-preview-map-canvas ${isEditing || isFareStopMapping ? "is-editing" : ""} ${
+          isRightMousePanning ? "is-right-panning" : ""
+        }`}
       />
+
+      {saveConfirmation ? (
+        <div className="route-save-confirmation" role="status" aria-live="polite">
+          <Check size={18} />
+          <span>
+            <strong>{saveConfirmation.title}</strong>
+            <small>{saveConfirmation.detail}</small>
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss route save confirmation"
+            onClick={() => setSaveConfirmation(null)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
 
       <div className={`route-mapper-toolbar ${isEditing ? "is-plotting" : ""}`}>
         <div className="route-mapper-toolbar-title">
@@ -1672,7 +2163,7 @@ export function RoutePreviewMap({
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search stop/place, e.g. SM City Fairview"
+              placeholder="Search PH street/place, e.g. Sampaloc"
             />
 
             <button
@@ -1685,11 +2176,18 @@ export function RoutePreviewMap({
             </button>
           </form>
 
+          {isSearching && searchQuery.trim().length >= 2 ? (
+            <div className="route-search-suggestion-state">
+              <Search size={13} />
+              Searching Philippines places...
+            </div>
+          ) : null}
+
           {searchResults.length ? (
             <div className="route-edit-search-results">
               {searchResults.map((result) => (
                 <button
-                  key={result.place_id}
+                  key={`${result.source || "search"}-${result.place_id}-${result.lat}-${result.lon}`}
                   type="button"
                   onClick={() => previewSearchResult(result)}
                 >
@@ -1702,6 +2200,12 @@ export function RoutePreviewMap({
                   </span>
                 </button>
               ))}
+            </div>
+          ) : null}
+
+          {!isSearching && searchQuery.trim().length >= 2 && !searchResults.length ? (
+            <div className="route-search-suggestion-state muted">
+              Philippines streets, roads, terminals, and landmarks only.
             </div>
           ) : null}
 
@@ -1781,6 +2285,12 @@ export function RoutePreviewMap({
         {fallbackWarning ? (
           <div className="route-fallback-warning" role="alert">
             <span>{fallbackWarning}</span>
+          </div>
+        ) : null}
+
+        {saveValidationMessage ? (
+          <div className="route-save-validation" role="status">
+            <span>{saveValidationMessage}</span>
           </div>
         ) : null}
 

@@ -13,6 +13,7 @@ import {
   Satellite,
   Search
 } from "lucide-react";
+import { createSatelliteHybridTileLayer } from "@/utils/mapTiles";
 import { getMainRouteLineId, normalizeMainRouteLineId } from "@/utils/routeLines";
 import { MAIN_TERMINALS, TERMINAL_ICON_ASSET } from "@/utils/terminals";
 
@@ -158,6 +159,8 @@ export function FleetMap({
   const adminLocationMarkerRef = useRef<LeafletMarker | null>(null);
   const requestedAdminLocationRef = useRef(false);
   const followedBusIdRef = useRef<string | null>(null);
+  const hasAutoFitFleetRef = useRef(false);
+  const hasAutoFitRouteRef = useRef(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [busQuery, setBusQuery] = useState("");
@@ -268,6 +271,7 @@ export function FleetMap({
 
   useEffect(() => {
     let cancelled = false;
+    let manualMoveCleanup: (() => void) | null = null;
 
     ensureLeaflet()
       .then((L) => {
@@ -284,21 +288,30 @@ export function FleetMap({
           attribution: "(c) OpenStreetMap",
           maxZoom: 19
         }).addTo(map);
-        satelliteLayerRef.current = L.tileLayer(
-          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-          {
-            attribution: "Tiles (c) Esri",
-            maxZoom: 19
-          }
-        );
+        satelliteLayerRef.current = createSatelliteHybridTileLayer(L);
 
         mapRef.current = map;
         setIsMapReady(true);
+
+        const stopFollowingOnManualMove = () => {
+          followedBusIdRef.current = null;
+          setFollowedBusId(null);
+        };
+
+        containerRef.current.addEventListener("mousedown", stopFollowingOnManualMove);
+        containerRef.current.addEventListener("touchstart", stopFollowingOnManualMove);
+        containerRef.current.addEventListener("wheel", stopFollowingOnManualMove);
+        manualMoveCleanup = () => {
+          containerRef.current?.removeEventListener("mousedown", stopFollowingOnManualMove);
+          containerRef.current?.removeEventListener("touchstart", stopFollowingOnManualMove);
+          containerRef.current?.removeEventListener("wheel", stopFollowingOnManualMove);
+        };
       })
       .catch((error) => setMapError(error instanceof Error ? error.message : "Map failed to load."));
 
     return () => {
       cancelled = true;
+      manualMoveCleanup?.();
     };
   }, []);
 
@@ -382,6 +395,7 @@ export function FleetMap({
         existing.on("click", () => {
           followedBusIdRef.current = bus.id;
           setFollowedBusId(bus.id);
+          hasAutoFitFleetRef.current = true;
           map.flyTo(position, 17, { animate: true, duration: 0.8 });
           existing.openPopup();
         });
@@ -390,6 +404,7 @@ export function FleetMap({
         marker.on("click", () => {
           followedBusIdRef.current = bus.id;
           setFollowedBusId(bus.id);
+          hasAutoFitFleetRef.current = true;
           map.flyTo(position, 17, { animate: true, duration: 0.8 });
           marker.openPopup();
         });
@@ -403,9 +418,12 @@ export function FleetMap({
       return;
     }
 
-    if (hasGps && mapBuses.length) {
+    if (!hasAutoFitFleetRef.current && hasGps && mapBuses.length) {
       const points = mapBuses.map((bus) => [bus.lat as number, bus.lng as number]);
-      if (points.length) map.fitBounds(points, { padding: [60, 60], maxZoom: 14 });
+      if (points.length) {
+        map.fitBounds(points, { padding: [60, 60], maxZoom: 14 });
+        hasAutoFitFleetRef.current = true;
+      }
     }
   }, [mapBuses, hasGps]);
 
@@ -424,6 +442,7 @@ export function FleetMap({
     if (marker && mapRef.current) {
       followedBusIdRef.current = bus.id;
       setFollowedBusId(bus.id);
+      hasAutoFitFleetRef.current = true;
       mapRef.current.flyTo(marker.getLatLng(), 17, { animate: true, duration: 0.8 });
       marker.openPopup();
     }
@@ -480,8 +499,9 @@ export function FleetMap({
       routeBounds.push(terminal.position);
     });
 
-    if (!mapBuses.length && routeBounds.length) {
+    if (!hasAutoFitRouteRef.current && !mapBuses.length && routeBounds.length) {
       map.fitBounds(routeBounds, { padding: [60, 60], maxZoom: 12 });
+      hasAutoFitRouteRef.current = true;
     }
 
   }, [mapBuses.length, routesWithWaypoints]);
@@ -508,6 +528,8 @@ export function FleetMap({
 
     followedBusIdRef.current = null;
     setFollowedBusId(null);
+    hasAutoFitFleetRef.current = true;
+    hasAutoFitRouteRef.current = true;
     const points = mapBuses.map((bus) => [bus.lat as number, bus.lng as number]);
 
     if (points.length) map.fitBounds(points, { padding: [60, 60], maxZoom: 14 });
@@ -525,6 +547,7 @@ export function FleetMap({
     if (marker && mapRef.current) {
       followedBusIdRef.current = bus.id;
       setFollowedBusId(bus.id);
+      hasAutoFitFleetRef.current = true;
       mapRef.current.flyTo(marker.getLatLng(), 16);
       marker.openPopup();
     }

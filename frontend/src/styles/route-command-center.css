@@ -101,6 +101,63 @@
     cursor: crosshair;
 }
 
+.route-preview-map-canvas.is-right-panning,
+.route-preview-map-canvas.is-right-panning * {
+    cursor: grabbing !important;
+}
+
+.route-save-confirmation {
+    position: absolute;
+    top: 86px;
+    left: 50%;
+    z-index: 940;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    width: min(520px, calc(100% - 28px));
+    padding: 11px 12px;
+    border: 1px solid color-mix(in srgb, var(--green) 58%, var(--line));
+    border-radius: var(--radius);
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(14px);
+    transform: translateX(-50%);
+}
+
+.route-save-confirmation svg {
+    color: var(--green);
+}
+
+.route-save-confirmation span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.route-save-confirmation strong {
+    font-size: 0.86rem;
+}
+
+.route-save-confirmation small {
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.25;
+}
+
+.route-save-confirmation button {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    background: var(--surface-muted);
+    cursor: pointer;
+}
+
 .route-mapper-toolbar {
     position: absolute;
     top: 12px;
@@ -238,6 +295,20 @@
 
 .route-preview-message strong {
     color: var(--text);
+}
+
+.route-save-validation {
+    display: inline-flex;
+    align-items: center;
+    max-width: min(100%, 390px);
+    min-height: 30px;
+    padding: 6px 9px;
+    border: 1px solid rgba(250, 204, 21, 0.36);
+    border-radius: var(--radius);
+    color: #facc15;
+    background: rgba(250, 204, 21, 0.08);
+    font-size: 0.74rem;
+    font-weight: 850;
 }
 
 .route-preview-action-row {
@@ -433,6 +504,25 @@
     background: var(--surface);
     text-align: left;
     cursor: pointer;
+}
+
+.route-search-suggestion-state {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+    border-radius: 10px;
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    font-size: 0.74rem;
+    font-weight: 800;
+}
+
+.route-search-suggestion-state.muted {
+    color: var(--muted);
+    font-weight: 700;
 }
 
 .route-edit-search-results strong {
@@ -772,6 +862,42 @@
     border-color: #13a46b;
     color: #fff;
     background: #13a46b;
+}
+
+.edit-point-popup {
+    display: grid;
+    gap: 6px;
+    min-width: 205px;
+}
+
+.edit-point-popup strong {
+    color: #101828;
+    font-size: 0.86rem;
+}
+
+.edit-point-popup span {
+    color: #344054;
+    font-size: 0.76rem;
+    font-weight: 850;
+}
+
+.edit-point-popup p {
+    margin: 0;
+    color: #667085;
+    font-size: 0.74rem;
+}
+
+.edit-point-popup button {
+    justify-self: start;
+    min-height: 28px;
+    padding: 5px 9px;
+    border: 1px solid rgba(220, 61, 53, 0.34);
+    border-radius: 7px;
+    color: #dc3d35;
+    background: rgba(220, 61, 53, 0.08);
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 900;
 }
 
 @keyframes route-preview-pulse {

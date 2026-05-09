@@ -191,7 +191,7 @@ const routeFromRow = (row: AnyRecord, waypoints: RouteWaypoint[] = [], stops: Ro
 const transactionFromTicket = (row: AnyRecord): TransactionLog => ({
   id: String(row.id),
   time: row.issued_at || row.created_at || null,
-  busNumber: row.bus_no || row.busNumber || "N/A",
+  busNumber: row.bus_number || row.bus_no || row.busNumber || "N/A",
   driver: row.driver_name || "N/A",
   conductor: row.conductor_name || "N/A",
   origin: row.origin || "N/A",

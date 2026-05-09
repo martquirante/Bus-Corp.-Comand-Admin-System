@@ -115,6 +115,17 @@ export const normalizeMainRouteLineId = (
   return null;
 };
 
+export const getMainRouteLineIdFromText = (
+  ...values: Array<string | number | null | undefined>
+): MainRouteLineId => {
+  const haystack = normalize(values.filter(Boolean).join(" "));
+
+  if (hasAnyKeyword(haystack, PITX_KEYWORDS)) return "fvr-pitx";
+  if (hasAnyKeyword(haystack, STCRUZ_KEYWORDS)) return "fvr-stcruz";
+
+  return "hidden";
+};
+
 const normalizeLineId = normalizeMainRouteLineId;
 
 const getRouteExtra = (route: RouteConfig) => route as RouteAny;

@@ -29,10 +29,33 @@ export const formatDateTime = (value: number | string | null | undefined) => {
   }).format(date);
 };
 
+const relativeTimeUnit = (value: number, singular: string, plural: string) =>
+  `${value} ${value === 1 ? singular : plural} ago`;
+
 export const relativeMinutes = (timestamp: number) => {
   if (!timestamp) return "No signal";
-  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+  const normalizedTimestamp = timestamp > 0 && timestamp < 100000000000 ? timestamp * 1000 : timestamp;
+  const minutes = Math.max(0, Math.floor((Date.now() - normalizedTimestamp) / 60000));
+
   if (minutes === 0) return "Just now";
-  if (minutes === 1) return "1 min ago";
-  return `${minutes} mins ago`;
+  if (minutes < 60) return relativeTimeUnit(minutes, "min", "mins");
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return relativeTimeUnit(hours, "hour", "hours");
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return relativeTimeUnit(days, "day", "days");
+
+  if (days < 30) {
+    const weeks = Math.max(1, Math.floor(days / 7));
+    return relativeTimeUnit(weeks, "week", "weeks");
+  }
+
+  if (days < 365) {
+    const months = Math.max(1, Math.floor(days / 30));
+    return relativeTimeUnit(months, "month", "months");
+  }
+
+  const years = Math.max(1, Math.floor(days / 365));
+  return relativeTimeUnit(years, "year", "years");
 };

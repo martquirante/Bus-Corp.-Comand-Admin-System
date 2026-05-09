@@ -3,12 +3,14 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
-import { Banknote, CalendarDays, Coins, Download, Landmark, TrendingUp } from "lucide-react";
+import type { TransactionLog } from "@pos-bus/shared";
+import { Banknote, CalendarDays, ChevronDown, Coins, Download, Landmark, TrendingUp } from "lucide-react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -27,22 +29,165 @@ import { DataTable } from "@/components/ui/DataTable";
 import { formatNumber, formatPeso } from "@/utils/format";
 
 const periods = ["Daily", "Weekly", "Monthly", "Yearly"] as const;
+type SalesPeriod = (typeof periods)[number];
+
+const shortenChartLabel = (value: string) => (value.length > 18 ? `${value.slice(0, 16)}...` : value);
+
+const formatCompactPeso = (value: unknown) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return "";
+  if (Math.abs(numericValue) >= 1000) return `PHP ${(numericValue / 1000).toFixed(numericValue % 1000 === 0 ? 0 : 1)}k`;
+  return formatPeso(numericValue);
+};
+
+const toTransactionDate = (value: TransactionLog["time"]) => {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number" || (typeof value === "string" && value.trim() && Number.isFinite(Number(value)))) {
+    const numeric = Number(value);
+    const timestamp = numeric > 0 && numeric < 100000000000 ? numeric * 1000 : numeric;
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getPeriodRange = (anchorDate: Date, selectedPeriod: SalesPeriod) => {
+  const start = new Date(anchorDate);
+  start.setHours(0, 0, 0, 0);
+
+  if (selectedPeriod === "Weekly") {
+    const weekday = start.getDay();
+    const daysFromMonday = weekday === 0 ? 6 : weekday - 1;
+    start.setDate(start.getDate() - daysFromMonday);
+  }
+
+  if (selectedPeriod === "Monthly") {
+    start.setDate(1);
+  }
+
+  if (selectedPeriod === "Yearly") {
+    start.setMonth(0, 1);
+  }
+
+  const end = new Date(start);
+  if (selectedPeriod === "Daily") end.setDate(end.getDate() + 1);
+  if (selectedPeriod === "Weekly") end.setDate(end.getDate() + 7);
+  if (selectedPeriod === "Monthly") end.setMonth(end.getMonth() + 1);
+  if (selectedPeriod === "Yearly") end.setFullYear(end.getFullYear() + 1);
+
+  return { start, end };
+};
+
+const formatPeriodRange = (selectedPeriod: SalesPeriod, start: Date, end: Date) => {
+  if (selectedPeriod === "Monthly") {
+    return new Intl.DateTimeFormat("en-PH", { month: "long", year: "numeric" }).format(start);
+  }
+
+  if (selectedPeriod === "Yearly") {
+    return new Intl.DateTimeFormat("en-PH", { year: "numeric" }).format(start);
+  }
+
+  const endInclusive = new Date(end.getTime() - 1);
+  const formatter = new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+
+  if (selectedPeriod === "Daily") return formatter.format(start);
+  return `${formatter.format(start)} - ${formatter.format(endInclusive)}`;
+};
+
+const buildRouteRevenueRows = (rows: TransactionLog[]) => {
+  const byRoute = new Map<string, { route: string; revenue: number; passengers: number }>();
+
+  rows.forEach((transaction) => {
+    const route = transaction.route || `${transaction.origin} -> ${transaction.destination}`;
+    const current = byRoute.get(route) || { route, revenue: 0, passengers: 0 };
+    current.revenue += transaction.amount;
+    current.passengers += transaction.passengerCount;
+    byRoute.set(route, current);
+  });
+
+  return [...byRoute.values()].sort((a, b) => b.revenue - a.revenue);
+};
 
 export function SalesAnalyticsPage() {
-  const [period, setPeriod] = useState<(typeof periods)[number]>("Daily");
+  const [period, setPeriod] = useState<SalesPeriod>("Daily");
   const [expenseForm, setExpenseForm] = useState({ type: "fuel", amount: "", bus: "", remarks: "" });
   const [expenseMessage, setExpenseMessage] = useState<string | null>(null);
   const loadStats = useCallback(() => api.stats(), []);
   const loadReport = useCallback(() => api.revenueReport(), []);
-  const loadTransactions = useCallback(() => api.transactions({ limit: 500 }), []);
+  const loadTransactions = useCallback(() => api.transactions({ limit: 1000 }), []);
   const stats = useLiveApiResource(loadStats, { intervalMs: 7000 });
   const report = useLiveApiResource(loadReport, { intervalMs: 9000 });
   const transactions = useLiveApiResource(loadTransactions, { intervalMs: 12000 });
   const dashboardStats = stats.data;
-  const revenueRows = useMemo(() => report.data || [], [report.data]);
+  const fallbackRevenueRows = useMemo(() => report.data || [], [report.data]);
+  const transactionRows = useMemo(() => transactions.data || [], [transactions.data]);
+  const transactionDates = useMemo(
+    () =>
+      transactionRows
+        .map((transaction) => toTransactionDate(transaction.time))
+        .filter((date): date is Date => Boolean(date)),
+    [transactionRows]
+  );
+  const periodRange = useMemo(() => {
+    const latestTransactionDate = transactionDates.reduce<Date | null>(
+      (latest, date) => (!latest || date.getTime() > latest.getTime() ? date : latest),
+      null
+    );
+
+    return getPeriodRange(latestTransactionDate || new Date(), period);
+  }, [period, transactionDates]);
+  const hasDatedTransactions = transactionDates.length > 0;
+  const periodTransactions = useMemo(() => {
+    if (!transactionRows.length) return [];
+    if (!hasDatedTransactions) return transactionRows;
+
+    return transactionRows.filter((transaction) => {
+      const date = toTransactionDate(transaction.time);
+      return date ? date >= periodRange.start && date < periodRange.end : false;
+    });
+  }, [hasDatedTransactions, periodRange, transactionRows]);
+  const periodRangeLabel = transactions.isLoading
+    ? "Loading ticket dates"
+    : hasDatedTransactions
+      ? formatPeriodRange(period, periodRange.start, periodRange.end)
+      : transactionRows.length
+        ? "All records without dates"
+        : "No ticket records yet";
+  const revenueRows = useMemo(() => {
+    if (transactionRows.length) return buildRouteRevenueRows(periodTransactions);
+    return fallbackRevenueRows;
+  }, [fallbackRevenueRows, periodTransactions, transactionRows.length]);
+  const periodPaymentTotals = useMemo(
+    () =>
+      periodTransactions.reduce(
+        (totals, transaction) => {
+          const paymentMethod = String(transaction.paymentMethod || "").toLowerCase();
+          if (paymentMethod === "cash") totals.cash += transaction.amount;
+          if (paymentMethod === "gcash") totals.gcash += transaction.amount;
+          return totals;
+        },
+        { cash: 0, gcash: 0 }
+      ),
+    [periodTransactions]
+  );
   const paymentData = [
-    { name: "Cash", value: dashboardStats?.cashTotal || 0, color: "#13a46b" },
-    { name: "GCash", value: dashboardStats?.gcashTotal || 0, color: "#0f7ad3" }
+    {
+      name: "Cash",
+      value: transactionRows.length ? periodPaymentTotals.cash : dashboardStats?.cashTotal || 0,
+      color: "#13a46b"
+    },
+    {
+      name: "GCash",
+      value: transactionRows.length ? periodPaymentTotals.gcash : dashboardStats?.gcashTotal || 0,
+      color: "#0f7ad3"
+    }
   ];
   const busiestRoute = useMemo(
     () =>
@@ -55,8 +200,8 @@ export function SalesAnalyticsPage() {
   const passengerDemand = useMemo(() => {
     const formatter = new Intl.DateTimeFormat("en-PH", { weekday: "short" });
     const demand = new Map<string, number>();
-    (transactions.data || []).forEach((transaction) => {
-      const date = transaction.time ? new Date(transaction.time) : null;
+    periodTransactions.forEach((transaction) => {
+      const date = toTransactionDate(transaction.time);
       if (!date) {
         demand.set("Unknown", (demand.get("Unknown") || 0) + transaction.passengerCount);
         return;
@@ -68,7 +213,7 @@ export function SalesAnalyticsPage() {
     return order
       .filter((day) => demand.has(day))
       .map((day) => ({ day, passengers: demand.get(day) || 0 }));
-  }, [transactions.data]);
+  }, [periodTransactions]);
   const peakDay = passengerDemand.reduce((top, day) => (day.passengers > top.passengers ? day : top), {
     day: "Waiting",
     passengers: 0
@@ -78,6 +223,7 @@ export function SalesAnalyticsPage() {
     const rows = [
       ["POS BUS Passenger and Revenue Ranking"],
       [`Generated,${new Date().toLocaleString("en-PH")}`],
+      [`Report window,${period} (${periodRangeLabel})`],
       ["Route", "Passengers", "Revenue"],
       ...revenueRows.map((row) => [row.route, row.passengers, row.revenue])
     ];
@@ -113,7 +259,7 @@ export function SalesAnalyticsPage() {
         <body>
           <header>
             <img src="${window.location.origin}/assets/logos/pos-bus-logo.png" />
-            <div><h1>Passenger and Revenue Ranking</h1><p>Generated ${new Date().toLocaleString("en-PH")} • ${period}</p></div>
+            <div><h1>Passenger and Revenue Ranking</h1><p>Generated ${new Date().toLocaleString("en-PH")} - ${period} - ${periodRangeLabel}</p></div>
           </header>
           <table>
             <thead><tr><th>Route</th><th>Passengers</th><th>Revenue</th></tr></thead>
@@ -158,35 +304,59 @@ export function SalesAnalyticsPage() {
         <div>
           <span>Report window</span>
           <strong>{period} live view</strong>
+          <small>{periodRangeLabel}</small>
         </div>
-        <div className="period-tabs" aria-label="Sales period">
-          {periods.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={item === period ? "active" : ""}
-              onClick={() => setPeriod(item)}
+        <label className="period-combobox">
+          <span>Sales period</span>
+          <div className="period-select-shell">
+            <select
+              value={period}
+              aria-label="Sales period"
+              onChange={(event) => setPeriod(event.target.value as SalesPeriod)}
             >
-              {item}
-            </button>
-          ))}
-        </div>
+              {periods.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={18} aria-hidden="true" />
+          </div>
+        </label>
         <div className="busy-day-card">
           <span>Passenger demand signal</span>
           <strong>{peakDay.passengers ? `${peakDay.day} peak` : busiestRoute?.route || "Waiting for Firebase data"}</strong>
-          <small>{formatNumber(peakDay.passengers || busiestRoute?.passengers || 0)} passengers in current dataset</small>
+          <small>{formatNumber(peakDay.passengers || busiestRoute?.passengers || 0)} passengers in selected window</small>
         </div>
       </section>
 
       <section className="analytics-grid">
         <ChartCard title="Top Route Revenue" eyebrow="Supabase tickets">
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={revenueRows.slice(0, 8)}>
+          <ResponsiveContainer width="100%" height={360}>
+            <BarChart data={revenueRows.slice(0, 8)} margin={{ top: 28, right: 12, bottom: 20, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="route" hide />
+              <XAxis
+                dataKey="route"
+                interval={0}
+                angle={-28}
+                textAnchor="end"
+                height={76}
+                tickMargin={12}
+                tick={{ fill: "#9aa6b6", fontSize: 11 }}
+                tickFormatter={shortenChartLabel}
+              />
               <YAxis tickFormatter={(value) => `${Number(value) / 1000}k`} />
               <Tooltip content={<CommandChartTooltip />} cursor={false} />
-              <Bar dataKey="revenue" fill="#0f7ad3" radius={[8, 8, 0, 0]} />
+              <Bar dataKey="revenue" fill="#0f7ad3" radius={[8, 8, 0, 0]}>
+                <LabelList
+                  dataKey="revenue"
+                  position="top"
+                  formatter={formatCompactPeso}
+                  fill="#e8eef8"
+                  fontSize={11}
+                  fontWeight={700}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
