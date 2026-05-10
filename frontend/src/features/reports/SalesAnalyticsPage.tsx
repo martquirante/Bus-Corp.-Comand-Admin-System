@@ -454,7 +454,18 @@ export function SalesAnalyticsPage() {
             </label>
             <label>
               Amount
-              <input required type="number" min="0" step="0.01" value={expenseForm.amount} onChange={(event) => setExpenseForm((value) => ({ ...value, amount: event.target.value }))} />
+              <span className="peso-input-shell">
+                <span aria-hidden="true">&#8369;</span>
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={expenseForm.amount}
+                  onChange={(event) => setExpenseForm((value) => ({ ...value, amount: event.target.value }))}
+                />
+              </span>
             </label>
             <label>
               Bus/Unit

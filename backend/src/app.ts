@@ -24,6 +24,7 @@ import { messagesRoutes } from "./routes/messages.routes.js";
 import { liveMapRoutes } from "./routes/liveMap.routes.js";
 import { expensesRoutes } from "./routes/expenses.routes.js";
 import { analyticsRoutes } from "./routes/analytics.routes.js";
+import { storageRoutes } from "./routes/storage.routes.js";
 import { requestLogger } from "./middleware/requestLogger.middleware.js";
 
 export const app = express();
@@ -69,6 +70,7 @@ app.use("/api/messages", messagesRoutes);
 app.use("/api/live-map", liveMapRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/storage", storageRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);

@@ -21,6 +21,10 @@ export type AdminRole =
   | "Mechanic"
   | "Passenger";
 
+export type EmployeeRole = "admin" | "conductor" | "driver" | "inspector" | "mechanic";
+
+export type EmployeeSalaryType = "daily" | "monthly" | "commission" | "trip" | "hourly";
+
 export type RouteStatus = "active" | "inactive" | "archived";
 
 export type RouteDirection = "forward" | "reverse";
@@ -245,6 +249,8 @@ export interface AdminAccount {
   role: AdminRole;
   status: "pending" | "active" | "inactive";
   dateApproved?: string;
+  employeeId?: string;
+  employeeNumber?: string;
 }
 
 export interface RevenueReport {
@@ -317,22 +323,57 @@ export interface CriticalAlert {
 
 export interface EmployeeRecord {
   id: string;
+  accountId?: string;
   employeeNumber: string;
   fullName: string;
-  role: "admin" | "conductor" | "driver" | "inspector" | "mechanic";
+  role: EmployeeRole;
   phone?: string;
   address?: string;
   email?: string;
   salaryRate?: number;
-  salaryType?: "daily" | "monthly" | "trip" | "hourly";
+  salaryType?: EmployeeSalaryType;
   dateHired?: string;
   status: "active" | "inactive" | "pending";
+  assignedBus?: string;
+  assignedRoute?: string;
   assignedBusId?: string;
   assignedRouteId?: string;
   pairedEmployeeId?: string;
   profilePhotoUrl?: string;
+  photoUrl?: string;
+  photoPath?: string;
+  signatureUrl?: string;
+  signaturePath?: string;
+  idFrontUrl?: string;
+  idFrontPath?: string;
+  idBackUrl?: string;
+  idBackPath?: string;
+  idPdfUrl?: string;
+  idPdfPath?: string;
+  qrUrl?: string;
+  qrPath?: string;
+  storageFolder?: string;
+  issuedDate?: string;
+  validUntil?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export type EmployeeAssetKey = "photo" | "signature" | "idFront" | "idBack" | "idPdf" | "qr";
+
+export interface EmployeeAssetInfo {
+  path?: string;
+  signedUrl?: string;
+  contentType?: string;
+  expiresIn?: number;
+}
+
+export interface EmployeeAssetsResponse {
+  employeeId: string;
+  employeeNumber: string;
+  storageFolder: string;
+  assets: Partial<Record<EmployeeAssetKey, EmployeeAssetInfo>>;
+  employee?: EmployeeRecord;
 }
 
 export interface BusFleetRecord {

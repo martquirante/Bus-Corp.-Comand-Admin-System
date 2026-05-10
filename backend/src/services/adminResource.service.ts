@@ -1,5 +1,5 @@
 import { firebasePaths } from "@pos-bus/shared";
-import type { BusFleetRecord, ChatConversation, ChatMessage, EmployeeRecord } from "@pos-bus/shared";
+import type { AdminAccount, BusFleetRecord, ChatConversation, ChatMessage, EmployeeRecord, EmployeeRole } from "@pos-bus/shared";
 import { realtimeDbService } from "./realtimeDb.service.js";
 import { firebaseService } from "./firebase.service.js";
 import { supabaseService } from "./supabase.service.js";
@@ -35,29 +35,168 @@ const patchRecord = async <T extends AnyRecord>(path: string, id: string, payloa
   return { ...(updated || ({} as T)), id };
 };
 
+const setRecord = async <T extends AnyRecord>(path: string, id: string, payload: Partial<T>) => {
+  const now = new Date().toISOString();
+  const current = await realtimeDbService.getPath<Partial<T>>(`${path}/${id}`);
+  const next = {
+    ...(current || {}),
+    ...payload,
+    createdAt: (current as AnyRecord | null)?.createdAt || (payload as AnyRecord).createdAt || now,
+    updatedAt: now
+  };
+
+  await realtimeDbService.setPath(`${path}/${id}`, next);
+  return { ...next, id };
+};
+
+const compactMerge = <T extends AnyRecord>(base: T, next: T) => {
+  const merged = { ...base };
+  Object.entries(next).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      merged[key as keyof T] = value as T[keyof T];
+    }
+  });
+  return merged;
+};
+
+const employeeMatchKeys = (employee: Partial<EmployeeRecord>) =>
+  [
+    employee.id,
+    employee.accountId,
+    employee.email?.toLowerCase(),
+    employee.employeeNumber?.toLowerCase()
+  ].filter(Boolean) as string[];
+
+const mergeEmployeeSources = (firebaseRows: EmployeeRecord[], supabaseRows: EmployeeRecord[]) => {
+  const rows: EmployeeRecord[] = [];
+  const index = new Map<string, number>();
+
+  const add = (employee: EmployeeRecord) => {
+    const keys = employeeMatchKeys(employee);
+    const match = keys.map((key) => index.get(key)).find((value) => value !== undefined);
+
+    if (match !== undefined) {
+      rows[match] = compactMerge(rows[match], employee);
+    } else {
+      rows.push(employee);
+      const rowIndex = rows.length - 1;
+      keys.forEach((key) => index.set(key, rowIndex));
+    }
+  };
+
+  firebaseRows.forEach(add);
+  supabaseRows.forEach(add);
+
+  return rows.sort((a, b) => a.fullName.localeCompare(b.fullName));
+};
+
+const accountRoleToEmployeeRole = (role: AdminAccount["role"]): EmployeeRole | null => {
+  const value = role.toLowerCase();
+  if (value === "admin" || value === "driver" || value === "conductor" || value === "inspector") {
+    return value;
+  }
+  return null;
+};
+
+const defaultSalaryForRole = (role: EmployeeRole) => {
+  if (role === "driver") return { salaryRate: 12, salaryType: "commission" as const };
+  if (role === "conductor") return { salaryRate: 10, salaryType: "commission" as const };
+  return { salaryRate: 0, salaryType: "daily" as const };
+};
+
+const employeeNumberFromAccount = (account: Pick<AdminAccount, "id" | "email">) => {
+  const seed = (account.id || account.email || "employee")
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .toUpperCase()
+    .slice(0, 6)
+    .padEnd(6, "0");
+  return `EMP-${seed}`;
+};
+
+const employeePayloadForAccount = (account: AdminAccount, existing?: EmployeeRecord): Partial<EmployeeRecord> | null => {
+  const role = accountRoleToEmployeeRole(account.role);
+  if (!role) return null;
+
+  const defaultSalary = defaultSalaryForRole(role);
+  const shouldApplyRoleDefault =
+    !existing ||
+    existing.salaryRate === undefined ||
+    existing.salaryType === undefined ||
+    (existing.role !== role && (!existing.salaryRate || existing.salaryRate === 0));
+
+  return {
+    accountId: account.id,
+    employeeNumber: existing?.employeeNumber || account.employeeNumber || employeeNumberFromAccount(account),
+    fullName: account.fullName,
+    email: account.email,
+    role,
+    status: account.status === "inactive" ? "inactive" : account.status === "pending" ? "pending" : "active",
+    salaryRate: shouldApplyRoleDefault ? defaultSalary.salaryRate : existing.salaryRate,
+    salaryType: shouldApplyRoleDefault ? defaultSalary.salaryType : existing.salaryType,
+    storageFolder: existing?.storageFolder || `employees/${existing?.employeeNumber || account.employeeNumber || employeeNumberFromAccount(account)}`
+  };
+};
+
 export const employeeService = {
   async list() {
-    const rows = await supabaseService.listEmployees();
-    return rows.length ? rows : listCollection<EmployeeRecord>(firebasePaths.employees);
+    const [supabaseRows, firebaseRows] = await Promise.all([
+      supabaseService.listEmployees().catch(() => []),
+      listCollection<EmployeeRecord>(firebasePaths.employees)
+    ]);
+    return mergeEmployeeSources(firebaseRows, supabaseRows);
+  },
+
+  async get(id: string) {
+    const rows = await this.list();
+    return rows.find((employee) => employee.id === id || employee.accountId === id || employee.employeeNumber === id) || null;
   },
 
   async create(payload: Partial<EmployeeRecord>, actor: string) {
     void firebaseService.auditAction("employee_create", actor, { employeeNumber: payload.employeeNumber });
-    const row = await supabaseService.createEmployee(payload);
-    if (row) return row;
+    const normalized = {
+      ...payload,
+      status: payload.status || "active",
+      storageFolder: payload.storageFolder || (payload.employeeNumber ? `employees/${payload.employeeNumber}` : undefined)
+    };
+    const row = await supabaseService.createEmployee(normalized);
+    if (row) {
+      await setRecord<EmployeeRecord>(firebasePaths.employees, row.id, compactMerge(normalized as EmployeeRecord, row));
+      return compactMerge(normalized as EmployeeRecord, row);
+    }
 
     return createRecord<Partial<EmployeeRecord>>(firebasePaths.employees, {
-      ...payload,
-      status: payload.status || "active"
+      ...normalized
     });
   },
 
   async patch(id: string, payload: Partial<EmployeeRecord>, actor: string) {
     void firebaseService.auditAction("employee_patch", actor, { id });
     const row = await supabaseService.patchEmployee(id, payload);
-    if (row) return row;
+    if (row) {
+      const merged = compactMerge(row, payload as EmployeeRecord);
+      await setRecord<EmployeeRecord>(firebasePaths.employees, row.id, merged);
+      return merged;
+    }
 
     return patchRecord<EmployeeRecord>(firebasePaths.employees, id, payload);
+  },
+
+  async upsertForAccount(account: AdminAccount, actor: string) {
+    const employees = await this.list();
+    const existing = employees.find(
+      (employee) =>
+        employee.accountId === account.id ||
+        employee.email?.toLowerCase() === account.email.toLowerCase() ||
+        employee.employeeNumber === account.employeeNumber
+    );
+    const payload = employeePayloadForAccount(account, existing);
+    if (!payload) return null;
+
+    if (existing) {
+      return this.patch(existing.id, payload, actor);
+    }
+
+    return this.create(payload, actor);
   }
 };
 

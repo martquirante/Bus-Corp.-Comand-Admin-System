@@ -74,6 +74,8 @@ const toIsoDate = (value: unknown) => {
   return new Date(timestamp).toISOString();
 };
 
+const hasValue = (value: unknown) => value !== null && value !== undefined && value !== "";
+
 const safeKey = (value: string) =>
   value
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
@@ -114,20 +116,122 @@ const dedupeTicketRows = <T extends AnyRecord>(rows: T[]) => {
 
 const employeeFromRow = (row: AnyRecord): EmployeeRecord => ({
   id: String(row.id),
+  accountId: row.account_id || row.accountId || undefined,
   employeeNumber: String(row.employee_no || row.employeeNumber || row.id),
   fullName: String(row.full_name || row.fullName || "Unnamed employee"),
   role: row.role || "conductor",
   phone: row.phone || undefined,
   address: row.address || undefined,
   email: row.email || undefined,
-  salaryRate: row.salary_rate ? toNumber(row.salary_rate) : undefined,
+  salaryRate: hasValue(row.salary_rate) ? toNumber(row.salary_rate) : undefined,
   salaryType: row.salary_type || undefined,
   dateHired: row.date_hired || undefined,
   status: row.status === "suspended" ? "inactive" : row.status || "active",
+  assignedBus: row.assigned_bus || row.assignedBus || undefined,
+  assignedRoute: row.assigned_route || row.assignedRoute || undefined,
+  assignedBusId: row.assigned_bus_id || row.assignedBusId || undefined,
+  assignedRouteId: row.assigned_route_id || row.assignedRouteId || undefined,
   profilePhotoUrl: row.profile_photo_url || undefined,
+  photoUrl: row.photo_url || row.profile_photo_url || undefined,
+  photoPath: row.photo_path || undefined,
+  signatureUrl: row.signature_url || undefined,
+  signaturePath: row.signature_path || undefined,
+  idFrontUrl: row.id_front_url || undefined,
+  idFrontPath: row.id_front_path || undefined,
+  idBackUrl: row.id_back_url || undefined,
+  idBackPath: row.id_back_path || undefined,
+  idPdfUrl: row.id_pdf_url || undefined,
+  idPdfPath: row.id_pdf_path || undefined,
+  qrUrl: row.qr_url || undefined,
+  qrPath: row.qr_path || undefined,
+  storageFolder: row.storage_folder || undefined,
+  issuedDate: row.issued_date || undefined,
+  validUntil: row.valid_until || undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at
 });
+
+const legacyEmployeeRow = (payload: Partial<EmployeeRecord>) => ({
+  employee_no: payload.employeeNumber,
+  full_name: payload.fullName,
+  role: payload.role,
+  phone: payload.phone || null,
+  email: payload.email || null,
+  address: payload.address || null,
+  salary_rate: hasValue(payload.salaryRate) ? payload.salaryRate : null,
+  salary_type: payload.salaryType || null,
+  date_hired: payload.dateHired || null,
+  status: payload.status || "active",
+  profile_photo_url: payload.profilePhotoUrl || payload.photoUrl || null
+});
+
+const employeeInsertRow = (payload: Partial<EmployeeRecord>) => ({
+  ...legacyEmployeeRow(payload),
+  account_id: payload.accountId || null,
+  assigned_bus: payload.assignedBus || null,
+  assigned_route: payload.assignedRoute || null,
+  assigned_bus_id: payload.assignedBusId || null,
+  assigned_route_id: payload.assignedRouteId || null,
+  photo_url: payload.photoUrl || payload.profilePhotoUrl || null,
+  photo_path: payload.photoPath || null,
+  signature_url: payload.signatureUrl || null,
+  signature_path: payload.signaturePath || null,
+  id_front_url: payload.idFrontUrl || null,
+  id_front_path: payload.idFrontPath || null,
+  id_back_url: payload.idBackUrl || null,
+  id_back_path: payload.idBackPath || null,
+  id_pdf_url: payload.idPdfUrl || null,
+  id_pdf_path: payload.idPdfPath || null,
+  qr_url: payload.qrUrl || null,
+  qr_path: payload.qrPath || null,
+  storage_folder: payload.storageFolder || null,
+  issued_date: payload.issuedDate || null,
+  valid_until: payload.validUntil || null
+});
+
+const legacyEmployeePatch = (payload: Partial<EmployeeRecord>) => {
+  const patch: AnyRecord = {};
+  if (payload.employeeNumber !== undefined) patch.employee_no = payload.employeeNumber;
+  if (payload.fullName !== undefined) patch.full_name = payload.fullName;
+  if (payload.role !== undefined) patch.role = payload.role;
+  if (payload.phone !== undefined) patch.phone = payload.phone;
+  if (payload.email !== undefined) patch.email = payload.email;
+  if (payload.address !== undefined) patch.address = payload.address;
+  if (payload.salaryRate !== undefined) patch.salary_rate = payload.salaryRate;
+  if (payload.salaryType !== undefined) patch.salary_type = payload.salaryType;
+  if (payload.dateHired !== undefined) patch.date_hired = payload.dateHired;
+  if (payload.status !== undefined) patch.status = payload.status === "pending" ? "inactive" : payload.status;
+  if (payload.profilePhotoUrl !== undefined || payload.photoUrl !== undefined) {
+    patch.profile_photo_url = payload.profilePhotoUrl || payload.photoUrl || null;
+  }
+  patch.updated_at = new Date().toISOString();
+  return patch;
+};
+
+const employeePatch = (payload: Partial<EmployeeRecord>) => {
+  const patch = legacyEmployeePatch(payload);
+  if (payload.accountId !== undefined) patch.account_id = payload.accountId || null;
+  if (payload.assignedBus !== undefined) patch.assigned_bus = payload.assignedBus || null;
+  if (payload.assignedRoute !== undefined) patch.assigned_route = payload.assignedRoute || null;
+  if (payload.assignedBusId !== undefined) patch.assigned_bus_id = payload.assignedBusId || null;
+  if (payload.assignedRouteId !== undefined) patch.assigned_route_id = payload.assignedRouteId || null;
+  if (payload.photoUrl !== undefined) patch.photo_url = payload.photoUrl || null;
+  if (payload.photoPath !== undefined) patch.photo_path = payload.photoPath || null;
+  if (payload.signatureUrl !== undefined) patch.signature_url = payload.signatureUrl || null;
+  if (payload.signaturePath !== undefined) patch.signature_path = payload.signaturePath || null;
+  if (payload.idFrontUrl !== undefined) patch.id_front_url = payload.idFrontUrl || null;
+  if (payload.idFrontPath !== undefined) patch.id_front_path = payload.idFrontPath || null;
+  if (payload.idBackUrl !== undefined) patch.id_back_url = payload.idBackUrl || null;
+  if (payload.idBackPath !== undefined) patch.id_back_path = payload.idBackPath || null;
+  if (payload.idPdfUrl !== undefined) patch.id_pdf_url = payload.idPdfUrl || null;
+  if (payload.idPdfPath !== undefined) patch.id_pdf_path = payload.idPdfPath || null;
+  if (payload.qrUrl !== undefined) patch.qr_url = payload.qrUrl || null;
+  if (payload.qrPath !== undefined) patch.qr_path = payload.qrPath || null;
+  if (payload.storageFolder !== undefined) patch.storage_folder = payload.storageFolder || null;
+  if (payload.issuedDate !== undefined) patch.issued_date = payload.issuedDate || null;
+  if (payload.validUntil !== undefined) patch.valid_until = payload.validUntil || null;
+  return patch;
+};
 
 const busFromRow = (row: AnyRecord): BusFleetRecord => ({
   id: String(row.id),
@@ -663,46 +767,28 @@ export const supabaseService = {
 
   async createEmployee(payload: Partial<EmployeeRecord>) {
     if (!supabaseAdmin) return null;
-    const { data, error } = await supabaseAdmin
-      .from("employees")
-      .insert({
-        employee_no: payload.employeeNumber,
-        full_name: payload.fullName,
-        role: payload.role,
-        phone: payload.phone || null,
-        email: payload.email || null,
-        address: payload.address || null,
-        salary_rate: payload.salaryRate || null,
-        salary_type: payload.salaryType || null,
-        date_hired: payload.dateHired || null,
-        status: payload.status || "active",
-        profile_photo_url: payload.profilePhotoUrl || null
-      })
-      .select("*")
-      .single();
-    if (error) throw new AppError(502, "SUPABASE_EMPLOYEE_CREATE_FAILED", error.message);
-    return employeeFromRow(data);
+    const { data, error } = await supabaseAdmin.from("employees").insert(employeeInsertRow(payload)).select("*").single();
+
+    if (!error) return employeeFromRow(data);
+
+    const fallback = await supabaseAdmin.from("employees").insert(legacyEmployeeRow(payload)).select("*").single();
+    if (fallback.error) {
+      throw new AppError(502, "SUPABASE_EMPLOYEE_CREATE_FAILED", fallback.error.message || error.message);
+    }
+    return employeeFromRow(fallback.data);
   },
 
   async patchEmployee(id: string, payload: Partial<EmployeeRecord>) {
     if (!supabaseAdmin) return null;
-    const patch: AnyRecord = {};
-    if (payload.employeeNumber !== undefined) patch.employee_no = payload.employeeNumber;
-    if (payload.fullName !== undefined) patch.full_name = payload.fullName;
-    if (payload.role !== undefined) patch.role = payload.role;
-    if (payload.phone !== undefined) patch.phone = payload.phone;
-    if (payload.email !== undefined) patch.email = payload.email;
-    if (payload.address !== undefined) patch.address = payload.address;
-    if (payload.salaryRate !== undefined) patch.salary_rate = payload.salaryRate;
-    if (payload.salaryType !== undefined) patch.salary_type = payload.salaryType;
-    if (payload.dateHired !== undefined) patch.date_hired = payload.dateHired;
-    if (payload.status !== undefined) patch.status = payload.status === "pending" ? "inactive" : payload.status;
-    if (payload.profilePhotoUrl !== undefined) patch.profile_photo_url = payload.profilePhotoUrl;
-    patch.updated_at = new Date().toISOString();
+    const { data, error } = await supabaseAdmin.from("employees").update(employeePatch(payload)).eq("id", id).select("*").single();
 
-    const { data, error } = await supabaseAdmin.from("employees").update(patch).eq("id", id).select("*").single();
-    if (error) throw new AppError(502, "SUPABASE_EMPLOYEE_PATCH_FAILED", error.message);
-    return employeeFromRow(data);
+    if (!error) return employeeFromRow(data);
+
+    const fallback = await supabaseAdmin.from("employees").update(legacyEmployeePatch(payload)).eq("id", id).select("*").single();
+    if (fallback.error) {
+      throw new AppError(502, "SUPABASE_EMPLOYEE_PATCH_FAILED", fallback.error.message || error.message);
+    }
+    return employeeFromRow(fallback.data);
   },
 
   async listBuses() {

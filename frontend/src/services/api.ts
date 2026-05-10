@@ -7,6 +7,7 @@ import type {
   CriticalAlert,
   DashboardSummary,
   DashboardStats,
+  EmployeeAssetsResponse,
   EmployeeRecord,
   FleetBus,
   LegacyAssistanceRequest,
@@ -146,6 +147,28 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelop
 
   if (!response.ok) {
     throw new Error(payload?.error?.message || payload?.message || "API request failed.");
+  }
+
+  return payload as ApiEnvelope<T>;
+}
+
+async function apiUpload<T>(path: string, file: Blob, contentType?: string): Promise<ApiEnvelope<T>> {
+  const token = getToken();
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": contentType || file.type || "application/octet-stream"
+    },
+    body: file,
+    cache: "no-store"
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || payload?.message || "API upload failed.");
   }
 
   return payload as ApiEnvelope<T>;
@@ -435,7 +458,7 @@ export const api = {
     });
   },
 
-  async patchAdmin(id: string, payload: Partial<AdminAccount>) {
+  async patchAdmin(id: string, payload: Partial<AdminAccount> & { password?: string }) {
     return apiFetch<AdminAccount>(`/admin/accounts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
@@ -458,6 +481,50 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload)
     });
+  },
+
+  async uploadEmployeePhoto(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(`/storage/employee/${encodeURIComponent(employeeId)}/photo`, file, file.type || "image/png");
+  },
+
+  async uploadEmployeeSignature(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(
+      `/storage/employee/${encodeURIComponent(employeeId)}/signature`,
+      file,
+      file.type || "image/png"
+    );
+  },
+
+  async uploadEmployeeIdFront(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(
+      `/storage/employee/${encodeURIComponent(employeeId)}/id-front`,
+      file,
+      "image/png"
+    );
+  },
+
+  async uploadEmployeeIdBack(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(
+      `/storage/employee/${encodeURIComponent(employeeId)}/id-back`,
+      file,
+      "image/png"
+    );
+  },
+
+  async uploadEmployeeIdPdf(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(
+      `/storage/employee/${encodeURIComponent(employeeId)}/id-pdf`,
+      file,
+      "application/pdf"
+    );
+  },
+
+  async uploadEmployeeQr(employeeId: string, file: Blob) {
+    return apiUpload<EmployeeAssetsResponse>(`/storage/employee/${encodeURIComponent(employeeId)}/qr`, file, "image/png");
+  },
+
+  async getEmployeeAssets(employeeId: string) {
+    return apiFetch<EmployeeAssetsResponse>(`/storage/employee/${encodeURIComponent(employeeId)}/assets`);
   },
 
   async buses() {
