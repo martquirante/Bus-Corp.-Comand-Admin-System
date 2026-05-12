@@ -1,14 +1,13 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { EmployeeRecord, EmployeeRole, EmployeeSalaryType } from "@pos-bus/shared";
-import { Edit3, Eye, IdCard, Power, Upload, X } from "lucide-react";
+import { Edit3, IdCard, Plus, Power, Search, X } from "lucide-react";
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
 import { DataTable } from "@/components/ui/DataTable";
-import { EmployeeIdCard } from "@/components/employee/EmployeeIdCard";
-import { EmployeeIdExportActions } from "@/components/employee/EmployeeIdExportActions";
+import { EmployeeProfilePanel } from "./EmployeeProfilePanel";
 
 type EmployeeEditForm = {
   employeeNumber: string;
@@ -24,8 +23,12 @@ type EmployeeEditForm = {
 };
 
 const roleOptions: EmployeeRole[] = ["admin", "driver", "conductor", "inspector", "mechanic"];
+const TRANSPORT_ROLES: EmployeeRole[] = ["driver", "conductor"];
 const salaryTypeOptions: EmployeeSalaryType[] = ["daily", "monthly", "commission"];
 const routeOptions = ["FVR-PITX-FVR", "FVR-ST. CRUZ-FVR"];
+
+type RoleFilter = "all" | EmployeeRole;
+type StatusFilter = "all" | "active" | "inactive" | "pending";
 
 const defaultSalary = (role: EmployeeRole) => {
   if (role === "driver") return { salaryRate: "12", salaryType: "commission" as const };
@@ -66,23 +69,28 @@ const formToPayload = (form: EmployeeEditForm): Partial<EmployeeRecord> => ({
   status: form.status
 });
 
+const EMPTY_ROWS: EmployeeRecord[] = [];
+
 export function EmployeePage() {
   const loadEmployees = useCallback(() => api.employees(), []);
   const employees = useApiResource(loadEmployees);
-  const rows = employees.data || [];
-  const frontRef = useRef<HTMLDivElement | null>(null);
-  const backRef = useRef<HTMLDivElement | null>(null);
+  const rows = employees.data || EMPTY_ROWS;
+
   const [selected, setSelected] = useState<EmployeeRecord | null>(null);
   const [editing, setEditing] = useState<EmployeeRecord | null>(null);
   const [form, setForm] = useState<EmployeeEditForm | null>(null);
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [qrDataUrl, setQrDataUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const selectedEmployee = useMemo(() => {
     if (!selected) return rows[0] || null;
-    return rows.find((employee) => employee.id === selected.id) || selected;
+    const rowMatch = rows.find((employee) => employee.id === selected.id);
+    if (!rowMatch) return selected;
+    return { ...rowMatch, ...selected };
   }, [rows, selected]);
 
   const loadAssets = useCallback(async (employee: EmployeeRecord) => {
@@ -104,7 +112,6 @@ export function EmployeePage() {
   const viewEmployee = async (employee: EmployeeRecord) => {
     setMessage(null);
     setSelected(employee);
-    setIsFlipped(false);
     await loadAssets(employee);
   };
 
@@ -114,6 +121,23 @@ export function EmployeePage() {
     setForm(employeeToForm(employee));
     setSelected(employee);
     await loadAssets(employee);
+  };
+
+  const openCreate = () => {
+    setMessage(null);
+    setIsCreating(true);
+    setForm({
+      employeeNumber: "",
+      fullName: "",
+      role: "driver",
+      phone: "",
+      address: "",
+      assignedBus: "",
+      assignedRoute: "",
+      salaryRate: "12",
+      salaryType: "commission",
+      status: "active"
+    });
   };
 
   const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
@@ -135,6 +159,25 @@ export function EmployeePage() {
     }
   };
 
+  const saveCreate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!form) return;
+    setIsSaving(true);
+    setMessage(null);
+
+    try {
+      const result = await api.createEmployee(formToPayload(form));
+      setSelected(result.data);
+      setIsCreating(false);
+      setForm(null);
+      await employees.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create employee.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const toggleStatus = async (employee: EmployeeRecord) => {
     const status = employee.status === "active" ? "inactive" : "active";
     const result = await api.patchEmployee(employee.id, { status });
@@ -144,7 +187,7 @@ export function EmployeePage() {
 
   const uploadAsset = async (event: ChangeEvent<HTMLInputElement>, kind: "photo" | "signature") => {
     const file = event.target.files?.[0];
-    const target = editing || selectedEmployee;
+    const target = selectedEmployee;
     event.target.value = "";
     if (!file || !target) return;
 
@@ -157,8 +200,7 @@ export function EmployeePage() {
           : await api.uploadEmployeeSignature(target.id, file);
       if (result.data.employee) {
         setSelected(result.data.employee);
-        setEditing(result.data.employee);
-        setForm(employeeToForm(result.data.employee));
+        setMessage(`Successfully uploaded employee ${kind}.`);
       }
       await employees.refresh();
     } catch (error) {
@@ -180,54 +222,118 @@ export function EmployeePage() {
     });
   };
 
-  const onSavedId = (employee: EmployeeRecord) => {
-    setSelected(employee);
-    void employees.refresh();
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const matchSearch =
+        !search ||
+        `${row.fullName} ${row.employeeNumber} ${row.role} ${row.phone} ${row.status}`
+          .toLowerCase()
+          .includes(search.toLowerCase());
+      const matchRole = roleFilter === "all" || row.role === roleFilter;
+      const matchStatus = statusFilter === "all" || row.status === statusFilter;
+      return matchSearch && matchRole && matchStatus;
+    });
+  }, [rows, search, roleFilter, statusFilter]);
+
+  const closeModal = () => {
+    setEditing(null);
+    setIsCreating(false);
+    setForm(null);
+    setMessage(null);
   };
 
+  const isModalOpen = (editing !== null || isCreating) && form !== null;
+
   return (
-    <AppShell title="Employee" kicker="Workforce profiles, salary settings, and secure ID generation">
-      {message ? (
-        <section className="command-card inline-error">
+    <AppShell title="Employees" kicker="Workforce registry, profiles, and digital ID management">
+      {/* Global error message */}
+      {message && !isModalOpen ? (
+        <section className={`command-card emp-global-message ${message.includes("Successfully") ? "inline-success" : "inline-error"}`}>
           <span>{message}</span>
         </section>
       ) : null}
 
+      {/* Search + Filters */}
+      <div className="emp-filter-bar">
+        <div className="emp-search-wrap">
+          <Search size={15} className="emp-search-icon" />
+          <input
+            className="emp-search-input"
+            placeholder="Search by name, ID, role, phone…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+
+        <div className="emp-chip-group">
+          <span className="emp-chip-label">Status</span>
+          {(["all", "active", "inactive", "pending"] as StatusFilter[]).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`emp-chip ${statusFilter === s ? "active" : ""}`}
+              onClick={() => setStatusFilter(s)}
+            >
+              {titleCase(s)}
+            </button>
+          ))}
+        </div>
+
+        <div className="emp-chip-group">
+          <span className="emp-chip-label">Role</span>
+          {(["all", ...roleOptions] as RoleFilter[]).map((r) => (
+            <button
+              key={r}
+              type="button"
+              className={`emp-chip ${roleFilter === r ? "active" : ""}`}
+              onClick={() => setRoleFilter(r)}
+            >
+              {titleCase(r)}
+            </button>
+          ))}
+        </div>
+
+        <button type="button" className="primary-action emp-add-btn" onClick={openCreate}>
+          <Plus size={16} /> Add Employee
+        </button>
+      </div>
+
+      {/* Main workspace: table left, profile right */}
       <section className="employee-workspace-grid">
+        {/* Table */}
         <section className="command-card">
           <div className="section-heading compact">
             <div>
-              <span>{rows.length} employees</span>
-              <h2>Workforce registry</h2>
+              <span>{filteredRows.length} of {rows.length} employees</span>
+              <h2>All Staff</h2>
             </div>
             <IdCard size={20} />
           </div>
           <DataTable
-            rows={rows}
+            rows={filteredRows}
             getRowKey={(row) => row.id}
+            onRowClick={(row) => void viewEmployee(row)}
+            selectedRowKey={selectedEmployee?.id}
             columns={[
               { header: "Employee name", cell: (row) => <strong>{row.fullName}</strong> },
-              { header: "Employee ID", cell: (row) => row.employeeNumber },
+              { header: "Employee ID", cell: (row) => row.employeeNumber || "—" },
               { header: "Role", cell: (row) => titleCase(row.role) },
-              { header: "Phone", cell: (row) => row.phone || "Not set" },
-              { header: "Bus", cell: (row) => row.assignedBus || row.assignedBusId || "Unassigned" },
-              { header: "Route", cell: (row) => row.assignedRoute || row.assignedRouteId || "Unassigned" },
-              { header: "Status", cell: (row) => <span className={`status-pill status-${row.status}`}>{row.status}</span> },
+              { header: "Phone", cell: (row) => row.phone || "—" },
+              { header: "Bus", cell: (row) => row.assignedBus || row.assignedBusId || "—" },
+              { header: "Route", cell: (row) => row.assignedRoute || row.assignedRouteId || "—" },
+              {
+                header: "Status",
+                cell: (row) => <span className={`status-pill status-${row.status}`}>{row.status}</span>
+              },
               {
                 header: "Actions",
                 cell: (row) => (
                   <div className="table-action-row">
-                    <button type="button" className="soft-button table-action" onClick={() => viewEmployee(row)}>
-                      <Eye size={14} /> View
-                    </button>
-                    <button type="button" className="soft-button table-action" onClick={() => openEdit(row)}>
+                    <button type="button" className="soft-button table-action" onClick={(e) => { e.stopPropagation(); void openEdit(row); }}>
                       <Edit3 size={14} /> Edit
                     </button>
-                    <button type="button" className="soft-button table-action" onClick={() => toggleStatus(row)}>
+                    <button type="button" className="soft-button table-action" onClick={(e) => { e.stopPropagation(); void toggleStatus(row); }}>
                       <Power size={14} /> {row.status === "active" ? "Deactivate" : "Activate"}
-                    </button>
-                    <button type="button" className="soft-button table-action" onClick={() => viewEmployee(row)}>
-                      <IdCard size={14} /> Preview ID
                     </button>
                   </div>
                 )
@@ -236,60 +342,60 @@ export function EmployeePage() {
           />
         </section>
 
-        <aside className="command-card employee-id-panel">
-          <div className="section-heading compact">
-            <div>
-              <span>Generated in web app</span>
-              <h2>Employee ID preview</h2>
-            </div>
-          </div>
-          <EmployeeIdCard
-            employee={selectedEmployee}
-            isFlipped={isFlipped}
-            frontRef={frontRef}
-            backRef={backRef}
-            onQrReady={setQrDataUrl}
-          />
-          <EmployeeIdExportActions
-            employee={selectedEmployee}
-            frontRef={frontRef}
-            backRef={backRef}
-            qrDataUrl={qrDataUrl}
-            onFlip={() => setIsFlipped((value) => !value)}
-            onSaved={onSavedId}
-          />
-        </aside>
+        {/* Profile panel */}
+        <EmployeeProfilePanel
+          employee={selectedEmployee}
+          isSaving={isSaving}
+          onEdit={() => selectedEmployee && void openEdit(selectedEmployee)}
+          onUpload={uploadAsset}
+        />
       </section>
 
-      {editing && form ? (
+      {/* Edit / Create modal */}
+      {isModalOpen ? (
         <div className="modal-backdrop" role="presentation">
-          <section className="command-card modal-panel employee-edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-employee-title">
+          <section
+            className="command-card modal-panel employee-edit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="emp-modal-title"
+          >
             <div className="section-heading compact">
               <div>
                 <span>Employee profile</span>
-                <h2 id="edit-employee-title">Edit workforce record</h2>
+                <h2 id="emp-modal-title">{isCreating ? "Add New Employee" : "Edit Employee Info"}</h2>
               </div>
-              <button type="button" className="icon-button" onClick={() => setEditing(null)} aria-label="Close edit employee">
+              <button type="button" className="icon-button" onClick={closeModal} aria-label="Close">
                 <X size={18} />
               </button>
             </div>
 
-            <form className="stacked-form" onSubmit={saveEdit}>
+            {message ? <p className="form-error" style={{ marginBottom: 12 }}>{message}</p> : null}
+
+            <form className="stacked-form" onSubmit={isCreating ? saveCreate : saveEdit}>
               <div className="form-row">
                 <label>
                   Employee number
-                  <input value={form.employeeNumber} onChange={(event) => setForm({ ...form, employeeNumber: event.target.value })} required />
+                  <input
+                    value={form!.employeeNumber}
+                    onChange={(e) => setForm({ ...form!, employeeNumber: e.target.value })}
+                    required
+                  />
                 </label>
                 <label>
                   Full name
-                  <input value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} required />
+                  <input
+                    value={form!.fullName}
+                    onChange={(e) => setForm({ ...form!, fullName: e.target.value })}
+                    required
+                  />
                 </label>
               </div>
 
               <div className="form-row">
                 <label>
                   Role
-                  <select value={form.role} onChange={(event) => updateRole(event.target.value as EmployeeRole)}>
+                  <select value={form!.role} onChange={(e) => updateRole(e.target.value as EmployeeRole)}>
                     {roleOptions.map((role) => (
                       <option key={role} value={role}>
                         {titleCase(role)}
@@ -299,10 +405,13 @@ export function EmployeePage() {
                 </label>
                 <label>
                   Status
-                  <select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as EmployeeRecord["status"] })}>
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="pending">Pending</option>
+                  <select
+                    value={form!.status}
+                    onChange={(e) => setForm({ ...form!, status: e.target.value as EmployeeRecord["status"] })}
+                  >
+                    <option value="active">Active — Can log in and work</option>
+                    <option value="inactive">Inactive — Access removed</option>
+                    <option value="pending">Pending — Awaiting approval</option>
                   </select>
                 </label>
               </div>
@@ -310,74 +419,80 @@ export function EmployeePage() {
               <div className="form-row">
                 <label>
                   Phone
-                  <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="09xx xxx xxxx" />
+                  <input
+                    value={form!.phone}
+                    onChange={(e) => setForm({ ...form!, phone: e.target.value })}
+                    placeholder="09xx xxx xxxx"
+                  />
                 </label>
                 <label>
                   Address
-                  <input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="Home address" />
+                  <input
+                    value={form!.address}
+                    onChange={(e) => setForm({ ...form!, address: e.target.value })}
+                    placeholder="Home address"
+                  />
                 </label>
               </div>
 
-              <div className="form-row">
-                <label>
-                  Assigned bus
-                  <input value={form.assignedBus} onChange={(event) => setForm({ ...form, assignedBus: event.target.value })} placeholder="BUS 314" />
-                </label>
-                <label>
-                  Assigned route
-                  <select value={form.assignedRoute} onChange={(event) => setForm({ ...form, assignedRoute: event.target.value })}>
-                    <option value="">Unassigned</option>
-                    {routeOptions.map((route) => (
-                      <option key={route} value={route}>
-                        {route}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
+              {/* Bus / Route — only relevant for Drivers and Conductors */}
+              {TRANSPORT_ROLES.includes(form!.role) && (
+                <div className="form-row">
+                  <label>
+                    Assigned Bus
+                    <input
+                      value={form!.assignedBus}
+                      onChange={(e) => setForm({ ...form!, assignedBus: e.target.value })}
+                      placeholder="e.g. BUS 314"
+                    />
+                  </label>
+                  <label>
+                    Assigned Route
+                    <select
+                      value={form!.assignedRoute}
+                      onChange={(e) => setForm({ ...form!, assignedRoute: e.target.value })}
+                    >
+                      <option value="">Not assigned</option>
+                      {routeOptions.map((route) => (
+                        <option key={route} value={route}>
+                          {route}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
 
               <div className="form-row">
                 <label>
-                  Salary rate
+                  Pay Rate
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={form.salaryRate}
-                    onChange={(event) => setForm({ ...form, salaryRate: event.target.value })}
+                    value={form!.salaryRate}
+                    onChange={(e) => setForm({ ...form!, salaryRate: e.target.value })}
                   />
                 </label>
                 <label>
-                  Salary type
-                  <select value={form.salaryType} onChange={(event) => setForm({ ...form, salaryType: event.target.value as EmployeeSalaryType })}>
-                    {salaryTypeOptions.map((type) => (
-                      <option key={type} value={type}>
-                        {titleCase(type)}
-                      </option>
-                    ))}
+                  Pay Schedule
+                  <select
+                    value={form!.salaryType}
+                    onChange={(e) => setForm({ ...form!, salaryType: e.target.value as EmployeeSalaryType })}
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="commission">Commission (per trip)</option>
                   </select>
                 </label>
               </div>
 
-              <div className="employee-upload-grid">
-                <label className="upload-tile">
-                  <Upload size={16} />
-                  <span>Upload profile photo</span>
-                  <input type="file" accept="image/*" onChange={(event) => uploadAsset(event, "photo")} />
-                </label>
-                <label className="upload-tile">
-                  <Upload size={16} />
-                  <span>Upload signature</span>
-                  <input type="file" accept="image/*" onChange={(event) => uploadAsset(event, "signature")} />
-                </label>
-              </div>
-
               <div className="inline-actions">
-                <button type="button" className="soft-button" onClick={() => setEditing(null)}>
+                <button type="button" className="soft-button" onClick={closeModal}>
                   Cancel
                 </button>
                 <button type="submit" className="primary-action" disabled={isSaving}>
-                  Save employee
+                  {isSaving ? "Saving…" : isCreating ? "Add employee" : "Save changes"}
                 </button>
               </div>
             </form>

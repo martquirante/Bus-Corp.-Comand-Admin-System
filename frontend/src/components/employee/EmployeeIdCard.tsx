@@ -1,6 +1,7 @@
 "use client";
 
 import { RefObject, useEffect, useMemo, useState } from "react";
+/* eslint-disable @next/next/no-img-element */
 import type { EmployeeRecord } from "@pos-bus/shared";
 import QRCode from "qrcode";
 
@@ -16,41 +17,58 @@ const logoPath = "/assets/logos/pos-bus-logo.png";
 
 const display = (value?: string, fallback = "Not set") => value || fallback;
 
-const prettyRole = (role?: string) => (role ? role.replace(/^\w/, (letter) => letter.toUpperCase()) : "Employee");
+const prettyRole = (role?: string) =>
+  role ? role.replace(/^\w/, (letter) => letter.toUpperCase()) : "Employee";
 
 const oneYearFromNow = () => {
   const date = new Date();
   date.setFullYear(date.getFullYear() + 1);
-  return date.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }).toUpperCase();
+  return date
+    .toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
+    .toUpperCase();
 };
 
-const issuedToday = () => new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }).toUpperCase();
+const issuedToday = () =>
+  new Date()
+    .toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
+    .toUpperCase();
+
+/** Roles that have an assigned bus / route on the ID */
+const TRANSPORT_ROLES: (EmployeeRecord["role"] | string)[] = ["driver", "conductor"];
 
 export function employeeQrPayload(employee: EmployeeRecord | null) {
   if (!employee) return "";
-  const verificationUrl =
-    typeof window === "undefined"
-      ? `https://pos-bus.local/verify/employee/${employee.employeeNumber}`
-      : `${window.location.origin}/verify/employee/${employee.employeeNumber}`;
-
-  return JSON.stringify({
-    employeeId: employee.id,
-    employeeNumber: employee.employeeNumber,
-    name: employee.fullName,
-    role: employee.role,
-    status: employee.status,
-    verificationUrl
-  });
+  // Return a nicely formatted text string for generic scanners
+  return `POS BUS EMPLOYEE ID
+-----------------------
+Name: ${employee.fullName || "N/A"}
+Employee No: ${employee.employeeNumber || "N/A"}
+Position: ${employee.role?.toUpperCase() || "N/A"}
+Status: ${employee.status?.toUpperCase() || "N/A"}
+Phone: ${employee.phone || "N/A"}`;
 }
 
-export function EmployeeIdCard({ employee, isFlipped, frontRef, backRef, onQrReady }: EmployeeIdCardProps) {
+export function EmployeeIdCard({
+  employee,
+  isFlipped,
+  frontRef,
+  backRef,
+  onQrReady,
+}: EmployeeIdCardProps) {
   const [qrDataUrl, setQrDataUrl] = useState("");
   const payload = useMemo(() => employeeQrPayload(employee), [employee]);
+
   const photoUrl = employee?.photoUrl || employee?.profilePhotoUrl;
   const signatureUrl = employee?.signatureUrl;
   const employeeNumber = employee?.employeeNumber || "EMP-0000";
-  const issuedDate = employee?.issuedDate ? new Date(employee.issuedDate).toLocaleDateString("en-US") : issuedToday();
-  const validUntil = employee?.validUntil ? new Date(employee.validUntil).toLocaleDateString("en-US") : oneYearFromNow();
+  const issuedDate = employee?.issuedDate
+    ? new Date(employee.issuedDate).toLocaleDateString("en-US")
+    : issuedToday();
+  const validUntil = employee?.validUntil
+    ? new Date(employee.validUntil).toLocaleDateString("en-US")
+    : oneYearFromNow();
+
+  const isTransportRole = TRANSPORT_ROLES.includes(employee?.role ?? "");
 
   useEffect(() => {
     if (!payload) {
@@ -64,9 +82,9 @@ export function EmployeeIdCard({ employee, isFlipped, frontRef, backRef, onQrRea
       margin: 1,
       errorCorrectionLevel: "M",
       color: {
-        dark: "#111827",
-        light: "#ffffff"
-      }
+        dark: "#0a1628",
+        light: "#ffffff",
+      },
     }).then((value) => {
       setQrDataUrl(value);
       onQrReady?.(value);
@@ -76,33 +94,57 @@ export function EmployeeIdCard({ employee, isFlipped, frontRef, backRef, onQrRea
   return (
     <div className={`employee-id-stage ${isFlipped ? "is-flipped" : ""}`} aria-live="polite">
       <div className="employee-id-flipper">
+
+        {/* ── FRONT ── */}
         <article className="employee-id-card employee-id-front" ref={frontRef}>
-          <div className="id-security-shine" />
-          <header className="id-card-header">
-            <div className="id-logo-lockup">
-              <img src={logoPath} alt="POS BUS logo" />
-              <div>
+          <div className="id-holographic-foil" />
+
+          {/* Header */}
+          <header className="id-header-modern">
+            <div className="id-header-left">
+              <div className="id-logo-ring">
+                <img src={logoPath} alt="POS BUS" />
+              </div>
+              <div className="id-brand-text">
                 <strong>POS BUS</strong>
                 <span>Employee Command ID</span>
               </div>
             </div>
-            <span className="id-status-chip">{employee?.status === "active" ? "ACTIVE STAFF" : display(employee?.status, "PENDING")}</span>
+            <div className="id-header-right">
+              <span className="id-status-chip">
+                {employee?.status === "active"
+                  ? "ACTIVE STAFF"
+                  : display(employee?.status, "PENDING").toUpperCase()}
+              </span>
+            </div>
           </header>
 
+          {/* Gold accent stripe */}
+          <div className="id-gold-stripe" />
+
+          {/* Hero — photo + identity */}
           <section className="id-card-hero">
             <div className="id-photo-frame">
-              {photoUrl ? <img src={photoUrl} alt={`${employee?.fullName || "Employee"} profile`} /> : <span>EMPLOYEE PHOTO</span>}
+              {photoUrl ? (
+                <img src={photoUrl} alt={`${employee?.fullName ?? "Employee"} photo`} />
+              ) : (
+                <span className="id-photo-placeholder">PHOTO</span>
+              )}
             </div>
+
             <div className="id-identity">
-              <span>Full name</span>
+              <span>Full Name</span>
               <strong>{employee?.fullName || "Employee Name"}</strong>
-              <span>Employee no.</span>
+
+              <span>Employee No.</span>
               <b>{employeeNumber}</b>
+
               <span>Position</span>
-              <strong>{prettyRole(employee?.role)}</strong>
+              <strong className="id-role-value">{prettyRole(employee?.role)}</strong>
             </div>
           </section>
 
+          {/* Info grid */}
           <section className="id-info-grid">
             <div>
               <span>Phone</span>
@@ -112,84 +154,89 @@ export function EmployeeIdCard({ employee, isFlipped, frontRef, backRef, onQrRea
               <span>Address</span>
               <strong>{display(employee?.address, "Address not set")}</strong>
             </div>
-            <div>
-              <span>Assigned bus</span>
-              <strong>{display(employee?.assignedBus || employee?.assignedBusId, "Unassigned")}</strong>
-            </div>
-            <div>
-              <span>Assigned route</span>
-              <strong>{display(employee?.assignedRoute || employee?.assignedRouteId, "Unassigned")}</strong>
-            </div>
+
+            {isTransportRole && (
+              <div>
+                <span>Assigned Bus</span>
+                <strong>
+                  {display(
+                    employee?.assignedBus || employee?.assignedBusId,
+                    "Unassigned"
+                  )}
+                </strong>
+              </div>
+            )}
+
+            {isTransportRole && (
+              <div>
+                <span>Assigned Route</span>
+                <strong>
+                  {display(
+                    employee?.assignedRoute || employee?.assignedRouteId,
+                    "Unassigned"
+                  )}
+                </strong>
+              </div>
+            )}
+
             <div className="id-status-box">
               <span>Status</span>
-              <strong>{display(employee?.status, "pending")}</strong>
-            </div>
-            <div>
-              <span>Valid until</span>
-              <strong>{validUntil}</strong>
+              <strong>{display(employee?.status, "Pending").toUpperCase()}</strong>
             </div>
           </section>
 
-          <footer className="id-card-footer">
-            <div>
-              <span>Security features</span>
-              <strong>Holographic shine • Secure employee record</strong>
+          {/* Footer */}
+          <footer className="id-footer-modern">
+            <div className="id-footer-left">
+              <img
+                src="/assets/bus/blue-aircon/bus-blue-aircon-front-left.png"
+                alt="Holographic Bus"
+                className="id-holographic-bus"
+              />
             </div>
             <div className="id-signature">
-              {signatureUrl ? <img src={signatureUrl} alt={`${employee?.fullName || "Employee"} signature`} /> : <strong>{employee?.fullName?.split(" ")[0] || "Signature"}</strong>}
+              {signatureUrl ? (
+                <img
+                  src={signatureUrl}
+                  alt={`${employee?.fullName ?? "Employee"} signature`}
+                />
+              ) : (
+                <strong>{employee?.fullName || "Employee"}</strong>
+              )}
               <span>Authorized Signature</span>
             </div>
           </footer>
         </article>
 
+        {/* ── BACK ── */}
         <article className="employee-id-card employee-id-back" ref={backRef}>
-          <div className="id-security-shine" />
-          <header className="id-card-header dark">
-            <div className="id-logo-lockup">
-              <img src={logoPath} alt="POS BUS logo" />
-              <div>
-                <strong>POS BUS</strong>
-                <span>Secure Employee QR Access</span>
-              </div>
-            </div>
-            <span className="id-status-chip">ACTIVE ID</span>
-          </header>
+          <div className="id-holographic-foil" />
 
-          <section className="id-qr-panel">
-            <div className="id-qr-title">
-              <strong>Scan Employee QR</strong>
+          {/* Just the QR Panel in the center */}
+          <section className="id-qr-panel" style={{ margin: "auto", width: "100%", padding: "20px" }}>
+            <div className="id-qr-title-bar" style={{ marginBottom: "15px" }}>
+              <strong>{employee?.fullName || "Employee"}</strong>
               <span>{employeeNumber}</span>
             </div>
-            <div className="id-qr-frame">{qrDataUrl ? <img src={qrDataUrl} alt="Employee verification QR code" /> : <span>QR</span>}</div>
-            <div className="id-qr-copy">
-              <span>How this QR works</span>
-              <p>Normal scanners show public employee details only. The POS employee app uses this QR for authorized login and transaction pairing.</p>
-            </div>
-          </section>
 
-          <section className="id-scan-rules">
-            <div>
-              <strong>Public scan</strong>
-              <span>Shows name, employee number, role, and active status.</span>
+            <div className="id-qr-frame" style={{ width: "min(260px, 90%)", padding: "15px" }}>
+              {qrDataUrl ? (
+                <img src={qrDataUrl} alt="Employee verification QR code" />
+              ) : (
+                <span className="id-qr-placeholder">QR</span>
+              )}
+              {/* Logo overlay in QR centre */}
+              <div className="id-qr-logo-overlay">
+                <img src={logoPath} alt="POS BUS" />
+              </div>
             </div>
-            <div className="green">
-              <strong>App scan</strong>
-              <span>Links authorized staff access for POS transactions.</span>
-            </div>
-            <div className="amber">
-              <strong>Lost ID</strong>
-              <span>Report immediately to POS BUS Admin Command.</span>
-            </div>
-          </section>
 
-          <footer className="id-card-footer dark">
-            <div>
-              <strong>Property of POS BUS Ticketing System</strong>
-              <span>Issued {issuedDate} • Verification ID: POS-{employeeNumber}</span>
-            </div>
-            <div className="id-seal">POS<br />BUS</div>
-          </footer>
+            <p className="id-qr-scan-note" style={{ marginTop: "15px" }}>
+              SCAN TO VERIFY EMPLOYEE IDENTITY · {employee?.role?.toUpperCase()}
+            </p>
+          </section>
         </article>
+
       </div>
     </div>
   );

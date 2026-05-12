@@ -3,8 +3,6 @@ import { canBypassReadAuth } from "../config/env.js";
 import { firebaseAdmin, isFirebaseReady } from "../config/firebase.js";
 import { sessionToken } from "../utils/sessionToken.js";
 
-const readMethods = new Set(["GET", "HEAD", "OPTIONS"]);
-
 const devBypassUser = {
   uid: "dev-admin",
   id: "dev-admin",
@@ -18,6 +16,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   const authHeader = req.header("authorization") || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
+  // Always accept valid backend session JWT (issued by this server)
   const backendSession = token ? sessionToken.verify(token) : null;
   if (backendSession) {
     req.user = backendSession;
@@ -25,27 +24,29 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  if (canBypassReadAuth() && readMethods.has(req.method)) {
+  // Dev bypass mode: allow all requests without Firebase
+  if (canBypassReadAuth()) {
     req.user = devBypassUser;
     next();
     return;
   }
 
-  if (canBypassReadAuth() && !token) {
+  // Production: require a valid Firebase ID token
+  if (!token) {
     res.status(401).json({
       error: {
-        code: "ADMIN_SESSION_REQUIRED",
-        message: "This action needs an admin session. Dev bypass only applies to read-only data."
+        code: "UNAUTHORIZED",
+        message: "Authorization header is missing. Provide a valid session token."
       }
     });
     return;
   }
 
-  if (!token || !isFirebaseReady) {
-    res.status(401).json({
+  if (!isFirebaseReady) {
+    res.status(503).json({
       error: {
-        code: "UNAUTHORIZED",
-        message: "A valid Firebase bearer token is required."
+        code: "FIREBASE_NOT_CONFIGURED",
+        message: "Firebase Admin SDK is not configured. Set FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY in backend/.env."
       }
     });
     return;
@@ -66,7 +67,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     res.status(401).json({
       error: {
         code: "INVALID_TOKEN",
-        message: "The supplied Firebase token is invalid or expired."
+        message: "The supplied token is invalid or expired."
       }
     });
   }

@@ -1,8 +1,8 @@
 "use client";
 
-import { RefObject, useEffect, useRef, useState } from "react";
+import { RefObject, useState } from "react";
 import type { EmployeeRecord } from "@pos-bus/shared";
-import { Download, FlipHorizontal } from "lucide-react";
+import { CloudUpload, Download, FlipHorizontal } from "lucide-react";
 import { toBlob } from "html-to-image";
 import { jsPDF } from "jspdf";
 import { api } from "@/services/api";
@@ -32,7 +32,8 @@ const nodeToBlob = async (node: HTMLDivElement | null) => {
     const blob = await toBlob(node, {
       cacheBust: true,
       pixelRatio: 2,
-      backgroundColor: "#ffffff"
+      backgroundColor: "#ffffff",
+      skipFonts: true
     });
     if (!blob) throw new Error("Could not render employee ID image.");
     return blob;
@@ -90,63 +91,58 @@ export function EmployeeIdExportActions({
   onSaved
 }: EmployeeIdExportActionsProps) {
   const [message, setMessage] = useState<string | null>(null);
+  const [isSuccess, setIsSuccess] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const fileBase = employee?.employeeNumber || "employee-id";
-  const lastSavedRef = useRef<string | null>(null);
 
   const guard = () => {
     if (!employee) throw new Error("Select an employee first.");
   };
 
-  const downloadFront = async () => {
+  const withLoading = async (fn: () => Promise<void>) => {
+    setIsWorking(true);
+    setMessage(null);
+    setIsSuccess(false);
     try {
+      await fn();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Action failed.");
+      setIsSuccess(false);
+    } finally {
+      setIsWorking(false);
+    }
+  };
+
+  const downloadFront = () =>
+    withLoading(async () => {
       guard();
-      setIsWorking(true);
-      setMessage(null);
       downloadBlob(await nodeToBlob(frontRef.current), `${fileBase}-front.png`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not download front ID.");
-    } finally {
-      setIsWorking(false);
-    }
-  };
+    });
 
-  const downloadBack = async () => {
-    try {
+  const downloadBack = () =>
+    withLoading(async () => {
       guard();
-      setIsWorking(true);
-      setMessage(null);
       downloadBlob(await nodeToBlob(backRef.current), `${fileBase}-back.png`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not download back ID.");
-    } finally {
-      setIsWorking(false);
-    }
-  };
+    });
 
-  const downloadPdf = async () => {
-    try {
+  const downloadPdf = () =>
+    withLoading(async () => {
       guard();
-      setIsWorking(true);
-      setMessage(null);
       const [front, back] = await Promise.all([nodeToBlob(frontRef.current), nodeToBlob(backRef.current)]);
       const width = frontRef.current?.offsetWidth || 390;
       const height = frontRef.current?.offsetHeight || 620;
       downloadBlob(await createPdfBlob(front, back, width, height), `${fileBase}.pdf`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not download employee ID PDF.");
-    } finally {
-      setIsWorking(false);
-    }
-  };
+    });
 
-  const saveToStorage = async () => {
-    try {
+  const saveToStorage = () =>
+    withLoading(async () => {
       guard();
       if (!employee) return;
-      setIsWorking(true);
-      setMessage(null);
-      const [front, back, qr] = await Promise.all([nodeToBlob(frontRef.current), nodeToBlob(backRef.current), qrBlob(qrDataUrl)]);
+      const [front, back, qr] = await Promise.all([
+        nodeToBlob(frontRef.current),
+        nodeToBlob(backRef.current),
+        qrBlob(qrDataUrl)
+      ]);
       const width = frontRef.current?.offsetWidth || 390;
       const height = frontRef.current?.offsetHeight || 620;
       const pdf = await createPdfBlob(front, back, width, height);
@@ -159,25 +155,8 @@ export function EmployeeIdExportActions({
         qrResult.data.employee || pdfResult.data.employee || backResult.data.employee || frontResult.data.employee;
       if (updated) onSaved(updated);
       setMessage("Employee ID assets saved to Supabase Storage.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save employee ID assets.");
-    } finally {
-      setIsWorking(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!employee || !qrDataUrl) return;
-    const saveKey = `${employee.id}-${qrDataUrl}`;
-    if (lastSavedRef.current === saveKey) return;
-    
-    const timer = setTimeout(() => {
-      lastSavedRef.current = saveKey;
-      saveToStorage();
-    }, 1500); // give DOM time to render images/fonts
-
-    return () => clearTimeout(timer);
-  }, [employee?.id, qrDataUrl]);
+      setIsSuccess(true);
+    });
 
   return (
     <div className="employee-id-actions">
@@ -193,13 +172,11 @@ export function EmployeeIdExportActions({
       <button type="button" className="soft-button" onClick={downloadPdf} disabled={!employee || isWorking}>
         <Download size={15} /> PDF
       </button>
-      {message && message !== "Employee ID assets saved to Supabase Storage." ? (
-        <p className="form-error export-message">{message}</p>
-      ) : null}
-      {isWorking ? <p className="form-success export-message">Auto-saving ID...</p> : null}
-      {message === "Employee ID assets saved to Supabase Storage." ? (
-        <p className="form-success export-message">ID saved to cloud.</p>
-      ) : null}
+      <button type="button" className="primary-action" onClick={saveToStorage} disabled={!employee || isWorking}>
+        <CloudUpload size={15} /> {isWorking ? "Saving…" : "Save to Cloud"}
+      </button>
+      {message && !isSuccess ? <p className="form-error export-message">{message}</p> : null}
+      {message && isSuccess ? <p className="form-success export-message">{message}</p> : null}
     </div>
   );
 }

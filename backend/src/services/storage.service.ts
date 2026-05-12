@@ -73,7 +73,13 @@ const storageFolderForEmployee = (employee: EmployeeRecord) =>
 
 const requireStorageClient = () => {
   if (!supabaseAdmin) {
-    throw new AppError(503, "SUPABASE_STORAGE_NOT_CONFIGURED", "Supabase service role is required for private employee storage.");
+    throw new AppError(
+      503,
+      "SUPABASE_STORAGE_NOT_CONFIGURED",
+      "Supabase Storage is not configured. " +
+        "Set SUPABASE_SERVICE_ROLE_KEY in backend/.env (get it from Supabase Dashboard → Settings → API → service_role key). " +
+        "Also make sure the 'employee-files' bucket exists in your Supabase project under Storage."
+    );
   }
   return supabaseAdmin.storage.from(employeeBucket);
 };
@@ -159,26 +165,13 @@ export const storageService = {
     });
     if (error) throw new AppError(502, "SUPABASE_UPLOAD_FAILED", error.message);
 
-    const signed = await signedUrlForPath(path);
     const patch = {
       storageFolder,
       [config.pathField]: path
     } as Partial<EmployeeRecord>;
-    const updated = await employeeService.patch(employee.id, patch, actor);
-    const employeeWithUrl = attachSignedUrl(updated, config.key, signed?.signedUrl);
+    await employeeService.patch(employee.id, patch, actor);
 
-    return {
-      employeeId: updated.id,
-      employeeNumber: updated.employeeNumber,
-      storageFolder,
-      assets: {
-        [config.key]: {
-          ...signed,
-          contentType: contentType || config.contentType
-        }
-      },
-      employee: employeeWithUrl
-    };
+    return await this.getEmployeeAssets(employee.id);
   }
 };
 
