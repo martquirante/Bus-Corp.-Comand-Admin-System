@@ -696,6 +696,7 @@ img {
   transition: transform 180ms ease, background 180ms ease;
 }
 
+
 .theme-toggle-thumb[data-active="true"] {
   transform: translateX(30px);
   background: var(--blue);
@@ -1372,6 +1373,8 @@ img {
 
 .employee-id-back {
   transform: rotateY(180deg);
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Holographic rainbow foil ── */
@@ -1677,22 +1680,30 @@ img {
   min-width: 0;
 }
 
+.id-signature-image-container {
+  height: 44px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  width: 100%;
+}
+
 .id-signature img {
   display: block;
   width: 100%;
   max-height: 44px;
   object-fit: contain;
-  border-bottom: 1.5px solid #49c5ff;
   mix-blend-mode: screen;
   filter: invert(1);
 }
 
 .id-signature > strong {
   display: block;
-  border-bottom: 1.5px solid #49c5ff;
+  border-top: 1.5px solid #49c5ff;
   color: #e8f4ff;
   font-size: 1rem;
-  padding-bottom: 2px;
+  padding-top: 2px;
+  white-space: nowrap;
 }
 
 .id-signature span {
@@ -2083,12 +2094,17 @@ img {
 .id-qr-panel {
   position: relative;
   z-index: 1;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(37, 174, 242, 0.28);
-  border-radius: 18px;
-  background: rgba(237, 247, 255, 0.78);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex: 1;
+  gap: 15px;
+  padding: 24px;
+  border-radius: 14px;
+  background: rgba(10, 25, 50, 0.6);
+  border: 1px solid rgba(73, 197, 255, 0.15);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.4);
 }
 
 .id-qr-title {
@@ -4145,10 +4161,7 @@ textarea:focus {
 }
 
 .hidden-file-input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+  display: none;
 }
 
 .profile-saving-note {

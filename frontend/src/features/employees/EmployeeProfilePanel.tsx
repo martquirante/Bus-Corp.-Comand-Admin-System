@@ -54,9 +54,18 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
         <span className={`profile-status-badge status-${statusClass}`}>{titleCase(employee.status || "pending")}</span>
       </div>
 
-      {/* Identity */}
+      {/* Identity — signature floats above the printed name line */}
       <div className="profile-identity">
-        <strong className="profile-name">{employee.fullName || "Unknown Employee"}</strong>
+        {signatureUrl ? (
+          <div className="profile-signature-over-name">
+            <img src={signatureUrl} alt={`${employee.fullName} signature`} />
+          </div>
+        ) : null}
+
+        <div className="profile-name-line">
+          <strong className="profile-name">{employee.fullName || "Unknown Employee"}</strong>
+        </div>
+
         <span className="profile-employee-num">{employee.employeeNumber || "No ID"}</span>
         <span className="profile-role">{titleCase(employee.role || "employee")}</span>
       </div>
@@ -91,14 +100,6 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
         )}
       </dl>
 
-      {/* Signature preview */}
-      {signatureUrl ? (
-        <div className="profile-signature-preview">
-          <span>Signature</span>
-          <img src={signatureUrl} alt={`${employee.fullName} signature`} />
-        </div>
-      ) : null}
-
       {/* Actions */}
       <div className="profile-action-grid">
         <button type="button" className="soft-button profile-action-btn" onClick={onEdit} disabled={isSaving}>
@@ -110,37 +111,45 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
         <button
           type="button"
           className={`soft-button profile-action-btn ${hasPhoto ? "profile-action-uploaded" : ""}`}
-          onClick={() => photoInputRef.current?.click()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            photoInputRef.current?.click();
+          }}
           disabled={isSaving}
         >
           {hasPhoto ? <CheckCircle size={15} /> : <Upload size={15} />}
           <span>{hasPhoto ? "Change Photo" : "Upload Photo"}</span>
-          <input
-            ref={photoInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden-file-input"
-            onChange={(e) => onUpload(e, "photo")}
-          />
         </button>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden-file-input"
+          onChange={(e) => onUpload(e, "photo")}
+        />
 
         {/* Signature upload */}
         <button
           type="button"
           className={`soft-button profile-action-btn ${hasSignature ? "profile-action-uploaded" : ""}`}
-          onClick={() => signatureInputRef.current?.click()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            signatureInputRef.current?.click();
+          }}
           disabled={isSaving}
         >
           {hasSignature ? <CheckCircle size={15} /> : <Upload size={15} />}
           <span>{hasSignature ? "Change Signature" : "Upload Signature"}</span>
-          <input
-            ref={signatureInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden-file-input"
-            onChange={(e) => onUpload(e, "signature")}
-          />
         </button>
+        <input
+          ref={signatureInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden-file-input"
+          onChange={(e) => onUpload(e, "signature")}
+        />
 
         <Link href={`/employees/${employee.id}/digital-id`} className="primary-action profile-action-btn profile-id-btn">
           <IdCard size={15} />

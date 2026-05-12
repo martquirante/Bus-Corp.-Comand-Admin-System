@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EmployeeRecord, EmployeeRole, EmployeeSalaryType } from "@pos-bus/shared";
 import { Edit3, IdCard, Plus, Power, Search, X } from "lucide-react";
 import { api } from "@/services/api";
@@ -69,6 +69,25 @@ const formToPayload = (form: EmployeeEditForm): Partial<EmployeeRecord> => ({
   status: form.status
 });
 
+const mergeEmployeeWithAssets = (base: EmployeeRecord, incoming: Partial<EmployeeRecord>): EmployeeRecord => ({
+  ...base,
+  ...incoming,
+  photoUrl: incoming.photoUrl || incoming.profilePhotoUrl || base.photoUrl || base.profilePhotoUrl,
+  profilePhotoUrl: incoming.profilePhotoUrl || incoming.photoUrl || base.profilePhotoUrl || base.photoUrl,
+  photoPath: incoming.photoPath || base.photoPath,
+  signatureUrl: incoming.signatureUrl || base.signatureUrl,
+  signaturePath: incoming.signaturePath || base.signaturePath,
+  idFrontUrl: incoming.idFrontUrl || base.idFrontUrl,
+  idFrontPath: incoming.idFrontPath || base.idFrontPath,
+  idBackUrl: incoming.idBackUrl || base.idBackUrl,
+  idBackPath: incoming.idBackPath || base.idBackPath,
+  idPdfUrl: incoming.idPdfUrl || base.idPdfUrl,
+  idPdfPath: incoming.idPdfPath || base.idPdfPath,
+  qrUrl: incoming.qrUrl || base.qrUrl,
+  qrPath: incoming.qrPath || base.qrPath,
+  storageFolder: incoming.storageFolder || base.storageFolder
+});
+
 const EMPTY_ROWS: EmployeeRecord[] = [];
 
 export function EmployeePage() {
@@ -90,13 +109,16 @@ export function EmployeePage() {
     if (!selected) return rows[0] || null;
     const rowMatch = rows.find((employee) => employee.id === selected.id);
     if (!rowMatch) return selected;
-    return { ...rowMatch, ...selected };
+    return mergeEmployeeWithAssets(rowMatch, selected);
   }, [rows, selected]);
 
+  // FIX: use mergeEmployeeWithAssets instead of direct setSelected
+  // so photo and signature don't overwrite each other on load
   const loadAssets = useCallback(async (employee: EmployeeRecord) => {
     try {
       const result = await api.getEmployeeAssets(employee.id);
-      if (result.data.employee) setSelected(result.data.employee);
+      if (result.data.employee)
+        setSelected((prev) => mergeEmployeeWithAssets(prev || employee, result.data.employee!));
     } catch {
       setSelected(employee);
     }
@@ -185,11 +207,17 @@ export function EmployeePage() {
     await employees.refresh();
   };
 
+  const uploadInFlightRef = useRef<string | null>(null);
+
   const uploadAsset = async (event: ChangeEvent<HTMLInputElement>, kind: "photo" | "signature") => {
     const file = event.target.files?.[0];
     const target = selectedEmployee;
     event.target.value = "";
     if (!file || !target) return;
+
+    const uploadKey = `${target.id}-${kind}`;
+    if (uploadInFlightRef.current === uploadKey) return;
+    uploadInFlightRef.current = uploadKey;
 
     setMessage(null);
     setIsSaving(true);
@@ -198,15 +226,22 @@ export function EmployeePage() {
         kind === "photo"
           ? await api.uploadEmployeePhoto(target.id, file)
           : await api.uploadEmployeeSignature(target.id, file);
+
       if (result.data.employee) {
-        setSelected(result.data.employee);
+        setSelected((current) => mergeEmployeeWithAssets(current || target, result.data.employee!));
         setMessage(`Successfully uploaded employee ${kind}.`);
       }
       await employees.refresh();
+
+      const assetsResult = await api.getEmployeeAssets(target.id);
+      if (assetsResult.data.employee) {
+        setSelected((current) => mergeEmployeeWithAssets(current || target, assetsResult.data.employee!));
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Could not upload employee ${kind}.`);
     } finally {
       setIsSaving(false);
+      uploadInFlightRef.current = null;
     }
   };
 

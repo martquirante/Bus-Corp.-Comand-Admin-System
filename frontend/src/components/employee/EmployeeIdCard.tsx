@@ -195,14 +195,15 @@ export function EmployeeIdCard({
               />
             </div>
             <div className="id-signature">
-              {signatureUrl ? (
-                <img
-                  src={signatureUrl}
-                  alt={`${employee?.fullName ?? "Employee"} signature`}
-                />
-              ) : (
-                <strong>{employee?.fullName || "Employee"}</strong>
-              )}
+              <div className="id-signature-image-container">
+                {signatureUrl && (
+                  <img
+                    src={signatureUrl}
+                    alt={`${employee?.fullName ?? "Employee"} signature`}
+                  />
+                )}
+              </div>
+              <strong>{employee?.fullName || "Employee"}</strong>
               <span>Authorized Signature</span>
             </div>
           </footer>
@@ -213,13 +214,13 @@ export function EmployeeIdCard({
           <div className="id-holographic-foil" />
 
           {/* Just the QR Panel in the center */}
-          <section className="id-qr-panel" style={{ margin: "auto", width: "100%", padding: "20px" }}>
-            <div className="id-qr-title-bar" style={{ marginBottom: "15px" }}>
+          <section className="id-qr-panel">
+            <div className="id-qr-title-bar">
               <strong>{employee?.fullName || "Employee"}</strong>
               <span>{employeeNumber}</span>
             </div>
 
-            <div className="id-qr-frame" style={{ width: "min(260px, 90%)", padding: "15px" }}>
+            <div className="id-qr-frame">
               {qrDataUrl ? (
                 <img src={qrDataUrl} alt="Employee verification QR code" />
               ) : (
@@ -231,7 +232,7 @@ export function EmployeeIdCard({
               </div>
             </div>
 
-            <p className="id-qr-scan-note" style={{ marginTop: "15px" }}>
+            <p className="id-qr-scan-note">
               SCAN TO VERIFY EMPLOYEE IDENTITY · {employee?.role?.toUpperCase()}
             </p>
           </section>
