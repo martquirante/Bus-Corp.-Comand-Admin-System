@@ -69,24 +69,50 @@ const formToPayload = (form: EmployeeEditForm): Partial<EmployeeRecord> => ({
   status: form.status
 });
 
-const mergeEmployeeWithAssets = (base: EmployeeRecord, incoming: Partial<EmployeeRecord>): EmployeeRecord => ({
-  ...base,
-  ...incoming,
-  photoUrl: incoming.photoUrl || incoming.profilePhotoUrl || base.photoUrl || base.profilePhotoUrl,
-  profilePhotoUrl: incoming.profilePhotoUrl || incoming.photoUrl || base.profilePhotoUrl || base.photoUrl,
-  photoPath: incoming.photoPath || base.photoPath,
-  signatureUrl: incoming.signatureUrl || base.signatureUrl,
-  signaturePath: incoming.signaturePath || base.signaturePath,
-  idFrontUrl: incoming.idFrontUrl || base.idFrontUrl,
-  idFrontPath: incoming.idFrontPath || base.idFrontPath,
-  idBackUrl: incoming.idBackUrl || base.idBackUrl,
-  idBackPath: incoming.idBackPath || base.idBackPath,
-  idPdfUrl: incoming.idPdfUrl || base.idPdfUrl,
-  idPdfPath: incoming.idPdfPath || base.idPdfPath,
-  qrUrl: incoming.qrUrl || base.qrUrl,
-  qrPath: incoming.qrPath || base.qrPath,
-  storageFolder: incoming.storageFolder || base.storageFolder
-});
+const mergeEmployeeWithAssets = (
+  base: EmployeeRecord | null | undefined,
+  incoming: Partial<EmployeeRecord> | null | undefined
+): EmployeeRecord | null => {
+  if (!base && !incoming) return null;
+  if (!base) return incoming as EmployeeRecord;
+  if (!incoming) return base;
+
+  return {
+    ...base,
+    ...incoming,
+
+    photoUrl:
+      incoming.photoUrl ||
+      incoming.profilePhotoUrl ||
+      base.photoUrl ||
+      base.profilePhotoUrl,
+
+    profilePhotoUrl:
+      incoming.profilePhotoUrl ||
+      incoming.photoUrl ||
+      base.profilePhotoUrl ||
+      base.photoUrl,
+
+    photoPath: incoming.photoPath || base.photoPath,
+
+    signatureUrl: incoming.signatureUrl || base.signatureUrl,
+    signaturePath: incoming.signaturePath || base.signaturePath,
+
+    idFrontUrl: incoming.idFrontUrl || base.idFrontUrl,
+    idFrontPath: incoming.idFrontPath || base.idFrontPath,
+
+    idBackUrl: incoming.idBackUrl || base.idBackUrl,
+    idBackPath: incoming.idBackPath || base.idBackPath,
+
+    idPdfUrl: incoming.idPdfUrl || base.idPdfUrl,
+    idPdfPath: incoming.idPdfPath || base.idPdfPath,
+
+    qrUrl: incoming.qrUrl || base.qrUrl,
+    qrPath: incoming.qrPath || base.qrPath,
+
+    storageFolder: incoming.storageFolder || base.storageFolder
+  };
+};
 
 const EMPTY_ROWS: EmployeeRecord[] = [];
 
@@ -120,7 +146,7 @@ export function EmployeePage() {
       if (result.data.employee)
         setSelected((prev) => mergeEmployeeWithAssets(prev || employee, result.data.employee!));
     } catch {
-      setSelected(employee);
+      setSelected((current) => mergeEmployeeWithAssets(current || employee, employee));
     }
   }, []);
 
@@ -133,7 +159,11 @@ export function EmployeePage() {
 
   const viewEmployee = async (employee: EmployeeRecord) => {
     setMessage(null);
-    setSelected(employee);
+    setSelected((current) =>
+      current?.id === employee.id
+        ? mergeEmployeeWithAssets(current, employee)
+        : employee
+    );
     await loadAssets(employee);
   };
 
@@ -141,7 +171,11 @@ export function EmployeePage() {
     setMessage(null);
     setEditing(employee);
     setForm(employeeToForm(employee));
-    setSelected(employee);
+    setSelected((current) =>
+      current?.id === employee.id
+        ? mergeEmployeeWithAssets(current, employee)
+        : employee
+    );
     await loadAssets(employee);
   };
 
@@ -170,7 +204,7 @@ export function EmployeePage() {
 
     try {
       const result = await api.patchEmployee(editing.id, formToPayload(form));
-      setSelected(result.data);
+      setSelected((current) => mergeEmployeeWithAssets(current || editing, result.data));
       setEditing(null);
       setForm(null);
       await employees.refresh();
@@ -189,7 +223,7 @@ export function EmployeePage() {
 
     try {
       const result = await api.createEmployee(formToPayload(form));
-      setSelected(result.data);
+      setSelected((current) => mergeEmployeeWithAssets(current, result.data));
       setIsCreating(false);
       setForm(null);
       await employees.refresh();
@@ -203,7 +237,7 @@ export function EmployeePage() {
   const toggleStatus = async (employee: EmployeeRecord) => {
     const status = employee.status === "active" ? "inactive" : "active";
     const result = await api.patchEmployee(employee.id, { status });
-    setSelected(result.data);
+    setSelected((current) => mergeEmployeeWithAssets(current || employee, result.data));
     await employees.refresh();
   };
 
@@ -228,14 +262,14 @@ export function EmployeePage() {
           : await api.uploadEmployeeSignature(target.id, file);
 
       if (result.data.employee) {
-        setSelected((current) => mergeEmployeeWithAssets(current || target, result.data.employee!));
+        setSelected((current) => mergeEmployeeWithAssets(current || target, result.data.employee || target));
         setMessage(`Successfully uploaded employee ${kind}.`);
       }
       await employees.refresh();
 
       const assetsResult = await api.getEmployeeAssets(target.id);
       if (assetsResult.data.employee) {
-        setSelected((current) => mergeEmployeeWithAssets(current || target, assetsResult.data.employee!));
+        setSelected((current) => mergeEmployeeWithAssets(current || target, assetsResult.data.employee || target));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Could not upload employee ${kind}.`);
@@ -381,6 +415,7 @@ export function EmployeePage() {
         <EmployeeProfilePanel
           employee={selectedEmployee}
           isSaving={isSaving}
+          uploadMessage={message}
           onEdit={() => selectedEmployee && void openEdit(selectedEmployee)}
           onUpload={uploadAsset}
         />

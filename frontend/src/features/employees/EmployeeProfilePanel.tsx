@@ -1,14 +1,15 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { ChangeEvent, useRef } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import type { EmployeeRecord } from "@pos-bus/shared";
-import { CheckCircle, Edit3, IdCard, Upload, User } from "lucide-react";
+import { CheckCircle, Edit3, IdCard, Loader2, Upload, User, X } from "lucide-react";
 import Link from "next/link";
 
 type EmployeeProfilePanelProps = {
   employee: EmployeeRecord | null;
   isSaving: boolean;
+  uploadMessage?: string | null;
   onEdit: () => void;
   onUpload: (event: ChangeEvent<HTMLInputElement>, kind: "photo" | "signature") => void;
 };
@@ -16,9 +17,35 @@ type EmployeeProfilePanelProps = {
 const titleCase = (value: string) => value.replace(/^\w/, (l) => l.toUpperCase());
 const display = (value?: string, fallback = "Not set") => value || fallback;
 
-export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: EmployeeProfilePanelProps) {
+export function EmployeeProfilePanel({ employee, isSaving, uploadMessage, onEdit, onUpload }: EmployeeProfilePanelProps) {
   const photoInputRef = useRef<HTMLInputElement>(null);
   const signatureInputRef = useRef<HTMLInputElement>(null);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [uploadingKind, setUploadingKind] = useState<"photo" | "signature" | null>(null);
+
+  // Show toast when uploadMessage changes
+  useEffect(() => {
+    if (!uploadMessage) return;
+    const isSuccess = uploadMessage.toLowerCase().includes("success");
+    setToast({ message: uploadMessage, type: isSuccess ? "success" : "error" });
+    setUploadingKind(null);
+
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [uploadMessage]);
+
+  // Clear uploading state when saving stops
+  useEffect(() => {
+    if (!isSaving) setUploadingKind(null);
+  }, [isSaving]);
+
+  const handleUpload = (event: ChangeEvent<HTMLInputElement>, kind: "photo" | "signature") => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploadingKind(kind);
+    setToast(null);
+    onUpload(event, kind);
+  };
 
   const photoUrl = employee?.photoUrl || employee?.profilePhotoUrl;
   const signatureUrl = employee?.signatureUrl;
@@ -42,6 +69,17 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
 
   return (
     <aside className="employee-profile-panel">
+      {/* Toast notification */}
+      {toast ? (
+        <div className={`profile-toast profile-toast-${toast.type}`}>
+          {toast.type === "success" ? <CheckCircle size={16} /> : <X size={16} />}
+          <span>{toast.message}</span>
+          <button type="button" className="profile-toast-dismiss" onClick={() => setToast(null)}>
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
+
       {/* Photo */}
       <div className="profile-photo-frame">
         {photoUrl ? (
@@ -110,7 +148,7 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
         {/* Photo upload */}
         <button
           type="button"
-          className={`soft-button profile-action-btn ${hasPhoto ? "profile-action-uploaded" : ""}`}
+          className={`soft-button profile-action-btn ${hasPhoto ? "profile-action-uploaded" : ""} ${uploadingKind === "photo" ? "profile-action-uploading" : ""}`}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -118,21 +156,27 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
           }}
           disabled={isSaving}
         >
-          {hasPhoto ? <CheckCircle size={15} /> : <Upload size={15} />}
-          <span>{hasPhoto ? "Change Photo" : "Upload Photo"}</span>
+          {uploadingKind === "photo" ? (
+            <Loader2 size={15} className="spin-icon" />
+          ) : hasPhoto ? (
+            <CheckCircle size={15} />
+          ) : (
+            <Upload size={15} />
+          )}
+          <span>{uploadingKind === "photo" ? "Uploading…" : hasPhoto ? "Change Photo" : "Upload Photo"}</span>
         </button>
         <input
           ref={photoInputRef}
           type="file"
           accept="image/*"
           className="hidden-file-input"
-          onChange={(e) => onUpload(e, "photo")}
+          onChange={(e) => handleUpload(e, "photo")}
         />
 
         {/* Signature upload */}
         <button
           type="button"
-          className={`soft-button profile-action-btn ${hasSignature ? "profile-action-uploaded" : ""}`}
+          className={`soft-button profile-action-btn ${hasSignature ? "profile-action-uploaded" : ""} ${uploadingKind === "signature" ? "profile-action-uploading" : ""}`}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -140,15 +184,21 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
           }}
           disabled={isSaving}
         >
-          {hasSignature ? <CheckCircle size={15} /> : <Upload size={15} />}
-          <span>{hasSignature ? "Change Signature" : "Upload Signature"}</span>
+          {uploadingKind === "signature" ? (
+            <Loader2 size={15} className="spin-icon" />
+          ) : hasSignature ? (
+            <CheckCircle size={15} />
+          ) : (
+            <Upload size={15} />
+          )}
+          <span>{uploadingKind === "signature" ? "Uploading…" : hasSignature ? "Change Signature" : "Upload Signature"}</span>
         </button>
         <input
           ref={signatureInputRef}
           type="file"
           accept="image/*"
           className="hidden-file-input"
-          onChange={(e) => onUpload(e, "signature")}
+          onChange={(e) => handleUpload(e, "signature")}
         />
 
         <Link href={`/employees/${employee.id}/digital-id`} className="primary-action profile-action-btn profile-id-btn">
@@ -157,7 +207,7 @@ export function EmployeeProfilePanel({ employee, isSaving, onEdit, onUpload }: E
         </Link>
       </div>
 
-      {isSaving ? <p className="profile-saving-note">Saving…</p> : null}
+      {isSaving && !uploadingKind ? <p className="profile-saving-note">Saving…</p> : null}
     </aside>
   );
 }

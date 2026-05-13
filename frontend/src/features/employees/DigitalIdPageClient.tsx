@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useApiResource } from "@/hooks/useApiResource";
@@ -14,6 +14,51 @@ type DigitalIdPageClientProps = {
   employeeId: string;
 };
 
+const mergeEmployeeWithAssets = (
+  base: EmployeeRecord | null | undefined,
+  incoming: Partial<EmployeeRecord> | null | undefined
+): EmployeeRecord | null => {
+  if (!base && !incoming) return null;
+  if (!base) return incoming as EmployeeRecord;
+  if (!incoming) return base;
+
+  return {
+    ...base,
+    ...incoming,
+
+    photoUrl:
+      incoming.photoUrl ||
+      incoming.profilePhotoUrl ||
+      base.photoUrl ||
+      base.profilePhotoUrl,
+
+    profilePhotoUrl:
+      incoming.profilePhotoUrl ||
+      incoming.photoUrl ||
+      base.profilePhotoUrl ||
+      base.photoUrl,
+
+    photoPath: incoming.photoPath || base.photoPath,
+
+    signatureUrl: incoming.signatureUrl || base.signatureUrl,
+    signaturePath: incoming.signaturePath || base.signaturePath,
+
+    idFrontUrl: incoming.idFrontUrl || base.idFrontUrl,
+    idFrontPath: incoming.idFrontPath || base.idFrontPath,
+
+    idBackUrl: incoming.idBackUrl || base.idBackUrl,
+    idBackPath: incoming.idBackPath || base.idBackPath,
+
+    idPdfUrl: incoming.idPdfUrl || base.idPdfUrl,
+    idPdfPath: incoming.idPdfPath || base.idPdfPath,
+
+    qrUrl: incoming.qrUrl || base.qrUrl,
+    qrPath: incoming.qrPath || base.qrPath,
+
+    storageFolder: incoming.storageFolder || base.storageFolder
+  };
+};
+
 export function DigitalIdPageClient({ employeeId }: DigitalIdPageClientProps) {
   const loadAssets = useCallback(() => api.getEmployeeAssets(employeeId), [employeeId]);
   const assetsResource = useApiResource(loadAssets);
@@ -25,11 +70,18 @@ export function DigitalIdPageClient({ employeeId }: DigitalIdPageClientProps) {
   const backRef = useRef<HTMLDivElement | null>(null);
 
   // Update employee when assets load
-  const resolvedEmployee =
-    employee || (assetsResource.data?.employee ?? null);
+  const resolvedEmployee = useMemo(
+    () => mergeEmployeeWithAssets(assetsResource.data?.employee ?? null, employee),
+    [assetsResource.data?.employee, employee]
+  );
 
   const handleSaved = (updated: EmployeeRecord) => {
-    setEmployee(updated);
+    setEmployee((current) =>
+      mergeEmployeeWithAssets(
+        mergeEmployeeWithAssets(assetsResource.data?.employee ?? null, current),
+        updated
+      )
+    );
     void assetsResource.refresh();
   };
 

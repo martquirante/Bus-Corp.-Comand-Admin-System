@@ -780,15 +780,55 @@ export const supabaseService = {
 
   async patchEmployee(id: string, payload: Partial<EmployeeRecord>) {
     if (!supabaseAdmin) return null;
-    const { data, error } = await supabaseAdmin.from("employees").update(employeePatch(payload)).eq("id", id).select("*").single();
 
+    // Try full patch first (includes all asset columns)
+    const { data, error } = await supabaseAdmin.from("employees").update(employeePatch(payload)).eq("id", id).select("*").single();
     if (!error) return employeeFromRow(data);
 
-    const fallback = await supabaseAdmin.from("employees").update(legacyEmployeePatch(payload)).eq("id", id).select("*").single();
-    if (fallback.error) {
-      throw new AppError(502, "SUPABASE_EMPLOYEE_PATCH_FAILED", fallback.error.message || error.message);
+    console.warn("[patchEmployee] Full patch failed, trying fallback:", error.message);
+
+    // Full patch failed — try basic fields only (safe columns that always exist)
+    const basicPatch = legacyEmployeePatch(payload);
+    const basicResult = await supabaseAdmin.from("employees").update(basicPatch).eq("id", id).select("*").single();
+
+    if (basicResult.error) {
+      console.warn("[patchEmployee] Basic patch also failed:", basicResult.error.message);
     }
-    return employeeFromRow(fallback.data);
+
+    // Now try asset-specific columns separately so missing columns don't block basic fields
+    const assetPatch: AnyRecord = {};
+    if (payload.photoPath !== undefined) assetPatch.photo_path = payload.photoPath || null;
+    if (payload.photoUrl !== undefined) assetPatch.photo_url = payload.photoUrl || null;
+    if (payload.signaturePath !== undefined) assetPatch.signature_path = payload.signaturePath || null;
+    if (payload.signatureUrl !== undefined) assetPatch.signature_url = payload.signatureUrl || null;
+    if (payload.idFrontPath !== undefined) assetPatch.id_front_path = payload.idFrontPath || null;
+    if (payload.idFrontUrl !== undefined) assetPatch.id_front_url = payload.idFrontUrl || null;
+    if (payload.idBackPath !== undefined) assetPatch.id_back_path = payload.idBackPath || null;
+    if (payload.idBackUrl !== undefined) assetPatch.id_back_url = payload.idBackUrl || null;
+    if (payload.idPdfPath !== undefined) assetPatch.id_pdf_path = payload.idPdfPath || null;
+    if (payload.idPdfUrl !== undefined) assetPatch.id_pdf_url = payload.idPdfUrl || null;
+    if (payload.qrPath !== undefined) assetPatch.qr_path = payload.qrPath || null;
+    if (payload.qrUrl !== undefined) assetPatch.qr_url = payload.qrUrl || null;
+    if (payload.storageFolder !== undefined) assetPatch.storage_folder = payload.storageFolder || null;
+    if (payload.issuedDate !== undefined) assetPatch.issued_date = payload.issuedDate || null;
+    if (payload.validUntil !== undefined) assetPatch.valid_until = payload.validUntil || null;
+    if (payload.accountId !== undefined) assetPatch.account_id = payload.accountId || null;
+    if (payload.assignedBus !== undefined) assetPatch.assigned_bus = payload.assignedBus || null;
+    if (payload.assignedRoute !== undefined) assetPatch.assigned_route = payload.assignedRoute || null;
+    if (payload.assignedBusId !== undefined) assetPatch.assigned_bus_id = payload.assignedBusId || null;
+    if (payload.assignedRouteId !== undefined) assetPatch.assigned_route_id = payload.assignedRouteId || null;
+
+    if (Object.keys(assetPatch).length > 0) {
+      // Silently try — if the columns don't exist, we just skip
+      const assetResult = await supabaseAdmin.from("employees").update(assetPatch).eq("id", id).select("*").single();
+      if (!assetResult.error) return employeeFromRow(assetResult.data);
+      console.warn("[patchEmployee] Asset columns patch failed (run the SQL migration):", assetResult.error.message);
+    }
+
+    if (basicResult.error) {
+      throw new AppError(502, "SUPABASE_EMPLOYEE_PATCH_FAILED", basicResult.error.message || error.message);
+    }
+    return employeeFromRow(basicResult.data);
   },
 
   async listBuses() {
