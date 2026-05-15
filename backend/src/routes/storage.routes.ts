@@ -12,3 +12,13 @@ storageRoutes.post(
   express.raw({ type: "*/*", limit: "15mb" }),
   asyncHandler(storageController.uploadEmployeeAsset)
 );
+storageRoutes.post(
+  "/bus/:busId/photo",
+  express.raw({ type: "*/*", limit: "15mb" }),
+  asyncHandler(storageController.uploadBusPhoto)
+);
+storageRoutes.post(
+  "/bus/:busId/documents/:docType",
+  express.raw({ type: "*/*", limit: "15mb" }),
+  asyncHandler(storageController.uploadBusDocument)
+);

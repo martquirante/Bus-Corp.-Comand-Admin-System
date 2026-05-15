@@ -9,10 +9,12 @@ import type {
   DashboardStats,
   EmployeeAssetsResponse,
   EmployeeRecord,
+  EmployeeViolationRecord,
   FleetBus,
   LegacyAssistanceRequest,
   LegacyMessage,
   LegacyNotification,
+  RemittanceRecord,
   RevenueReport,
   RouteConfig,
   TransactionLog
@@ -563,5 +565,96 @@ export const api = {
         body: JSON.stringify(payload)
       }
     );
+  },
+
+  // ─── Bus Photo Upload ──────────────────────────────────────────────────
+
+  async uploadBusPhoto(busId: string, file: Blob) {
+    return apiUpload<{ busId: string; photoPath: string; photoUrl: string }>(
+      `/storage/bus/${encodeURIComponent(busId)}/photo`,
+      file,
+      file.type || "image/png"
+    );
+  },
+
+  async uploadBusDocument(busId: string, docType: string, file: Blob) {
+    return apiUpload<{ busId: string; docType: string; docPath: string; docUrl: string }>(
+      `/storage/bus/${encodeURIComponent(busId)}/documents/${encodeURIComponent(docType)}`,
+      file,
+      file.type || "application/pdf"
+    );
+  },
+
+  // ─── Remittances ──────────────────────────────────────────────────────
+
+  async remittances(filters?: Partial<{ conductorId: string; status: string; date: string }>) {
+    const query = new URLSearchParams();
+    Object.entries(filters || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return apiFetch<RemittanceRecord[]>(`/remittances${query.size ? `?${query}` : ""}`);
+  },
+
+  async createRemittance(payload: Partial<RemittanceRecord>) {
+    return apiFetch<RemittanceRecord>("/remittances", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async patchRemittance(id: string, payload: Partial<RemittanceRecord>) {
+    return apiFetch<RemittanceRecord>(`/remittances/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async receiveRemittance(id: string, payload?: { cashierId?: string; notes?: string }) {
+    return apiFetch<RemittanceRecord>(`/remittances/${encodeURIComponent(id)}/receive`, {
+      method: "PATCH",
+      body: JSON.stringify(payload || {})
+    });
+  },
+
+  async rejectRemittance(id: string, payload?: { notes?: string }) {
+    return apiFetch<RemittanceRecord>(`/remittances/${encodeURIComponent(id)}/reject`, {
+      method: "PATCH",
+      body: JSON.stringify(payload || {})
+    });
+  },
+
+  // ─── Employee Violations ───────────────────────────────────────────────
+
+  async employeeViolations(filters?: Partial<{ employeeId: string; status: string; severity: string }>) {
+    const query = new URLSearchParams();
+    Object.entries(filters || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    });
+    return apiFetch<EmployeeViolationRecord[]>(`/employee-violations${query.size ? `?${query}` : ""}`);
+  },
+
+  async getEmployeeViolations(employeeId: string) {
+    return apiFetch<EmployeeViolationRecord[]>(`/employees/${encodeURIComponent(employeeId)}/violations`);
+  },
+
+  async createViolation(payload: Partial<EmployeeViolationRecord>) {
+    return apiFetch<EmployeeViolationRecord>("/employee-violations", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async patchViolation(id: string, payload: Partial<EmployeeViolationRecord>) {
+    return apiFetch<EmployeeViolationRecord>(`/employee-violations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async patchViolationStatus(id: string, payload: Pick<Partial<EmployeeViolationRecord>, "status" | "resolutionNotes">) {
+    return apiFetch<EmployeeViolationRecord>(`/employee-violations/${encodeURIComponent(id)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    });
   }
 };

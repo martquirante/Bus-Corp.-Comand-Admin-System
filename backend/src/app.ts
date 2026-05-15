@@ -26,6 +26,8 @@ import { expensesRoutes } from "./routes/expenses.routes.js";
 import { analyticsRoutes } from "./routes/analytics.routes.js";
 import { storageRoutes } from "./routes/storage.routes.js";
 import { requestLogger } from "./middleware/requestLogger.middleware.js";
+import { remittancesRoutes } from "./routes/remittances.routes.js";
+import { employeeViolationsRoutes } from "./routes/employeeViolations.routes.js";
 
 export const app = express();
 
@@ -71,6 +73,8 @@ app.use("/api/live-map", liveMapRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/storage", storageRoutes);
+app.use("/api/remittances", remittancesRoutes);
+app.use("/api/employee-violations", employeeViolationsRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);

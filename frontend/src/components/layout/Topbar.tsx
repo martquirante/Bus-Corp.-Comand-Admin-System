@@ -44,11 +44,6 @@ export function Topbar({ title, kicker }: { title: string; kicker?: string }) {
         <p>{date} <span className="topbar-time">• {time}</span></p>
       </div>
       <div className="topbar-actions">
-        <label className="command-search">
-          <Search size={16} />
-          <input type="search" placeholder="Search bus, route, ticket" aria-label="Search command center" />
-          <Command size={14} />
-        </label>
         <SignalHealth />
         <NotificationCenter />
         <ThemeToggle />

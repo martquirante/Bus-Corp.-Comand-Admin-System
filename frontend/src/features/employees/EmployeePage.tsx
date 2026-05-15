@@ -1,13 +1,15 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EmployeeRecord, EmployeeRole, EmployeeSalaryType } from "@pos-bus/shared";
-import { Edit3, IdCard, Plus, Power, Search, X } from "lucide-react";
+import type { EmployeeRecord, EmployeeRole, EmployeeSalaryType, EmployeeViolationRecord } from "@pos-bus/shared";
+import { AlertTriangle, Edit3, IdCard, Plus, Power, Search, X } from "lucide-react";
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
+import { Portal } from "@/components/ui/Portal";
 import { DataTable } from "@/components/ui/DataTable";
 import { EmployeeProfilePanel } from "./EmployeeProfilePanel";
+import { isActiveSuspension, isOpenViolation } from "../violations/violationConfig";
 
 type EmployeeEditForm = {
   employeeNumber: string;
@@ -32,8 +34,8 @@ type RoleFilter = "all" | EmployeeRole;
 type StatusFilter = "all" | "active" | "inactive" | "pending";
 
 const defaultSalary = (role: EmployeeRole) => {
-  if (role === "driver") return { salaryRate: "15", salaryType: "commission" as const };
-  if (role === "conductor") return { salaryRate: "12", salaryType: "commission" as const };
+  if (role === "driver") return { salaryRate: "15", salaryType: "daily" as const };
+  if (role === "conductor") return { salaryRate: "12", salaryType: "daily" as const };
   return { salaryRate: "0", salaryType: "daily" as const };
 };
 
@@ -118,15 +120,19 @@ const mergeEmployeeWithAssets = (
 };
 
 const EMPTY_ROWS: EmployeeRecord[] = [];
+const EMPTY_VIOLATIONS: EmployeeViolationRecord[] = [];
 
 export function EmployeePage() {
   const loadEmployees = useCallback(() => api.employees(), []);
   const loadBuses = useCallback(() => api.buses(), []);
+  const loadViolations = useCallback(() => api.employeeViolations(), []);
   
   const employees = useApiResource(loadEmployees);
   const buses = useApiResource(loadBuses);
+  const violations = useApiResource(loadViolations);
   
   const rows = employees.data || EMPTY_ROWS;
+  const violationRows = violations.data || EMPTY_VIOLATIONS;
 
   const [selected, setSelected] = useState<EmployeeRecord | null>(null);
   const [editing, setEditing] = useState<EmployeeRecord | null>(null);
@@ -144,6 +150,27 @@ export function EmployeePage() {
     if (!rowMatch) return selected;
     return mergeEmployeeWithAssets(rowMatch, selected);
   }, [rows, selected]);
+
+  const violationsByEmployee = useMemo(() => {
+    const map = new Map<string, EmployeeViolationRecord[]>();
+    violationRows.forEach((violation) => {
+      if (!violation.employeeId) return;
+      const list = map.get(violation.employeeId) || [];
+      list.push(violation);
+      map.set(violation.employeeId, list);
+    });
+    return map;
+  }, [violationRows]);
+
+  const selectedEmployeeViolations = selectedEmployee ? violationsByEmployee.get(selectedEmployee.id) || EMPTY_VIOLATIONS : EMPTY_VIOLATIONS;
+
+  const disciplineSummaryFor = (employee: EmployeeRecord) => {
+    const records = violationsByEmployee.get(employee.id) || EMPTY_VIOLATIONS;
+    const active = records.filter(isOpenViolation);
+    const criticalActive = active.some((record) => record.severity === "critical");
+    const suspended = active.some((record) => isActiveSuspension(record));
+    return { total: records.length, active: active.length, criticalActive, suspended };
+  };
 
   // FIX: use mergeEmployeeWithAssets instead of direct setSelected
   // so photo and signature don't overwrite each other on load
@@ -189,8 +216,18 @@ export function EmployeePage() {
   const openCreate = () => {
     setMessage(null);
     setIsCreating(true);
+
+    const prefix = "EMP-";
+    const existingIds = rows.map((r) => r.employeeNumber || "").filter((id) => id.startsWith(prefix));
+    let nextNum = 1;
+    if (existingIds.length > 0) {
+      const maxId = Math.max(...existingIds.map((id) => parseInt(id.substring(4), 10) || 0));
+      nextNum = maxId + 1;
+    }
+    const autoNumber = `${prefix}${String(nextNum).padStart(3, "0")}`;
+
     setForm({
-      employeeNumber: "",
+      employeeNumber: autoNumber,
       fullName: "",
       email: "",
       role: "driver",
@@ -199,7 +236,7 @@ export function EmployeePage() {
       assignedBus: "",
       assignedRoute: "",
       salaryRate: "15",
-      salaryType: "commission",
+      salaryType: "daily",
       status: "active"
     });
   };
@@ -370,7 +407,7 @@ export function EmployeePage() {
       
       return !isOccupied || isCurrentAssignment;
     });
-  }, [buses.data, form?.role, editing?.id, editing?.assignedBus, editing?.assignedBusId, rows]);
+  }, [buses.data, form, editing?.id, editing?.assignedBus, editing?.assignedBusId, rows]);
 
   const isModalOpen = (editing !== null || isCreating) && form !== null;
 
@@ -453,7 +490,28 @@ export function EmployeePage() {
               { header: "Route", cell: (row) => row.assignedRoute || row.assignedRouteId || "—" },
               {
                 header: "Status",
-                cell: (row) => <span className={`status-pill status-${row.status}`}>{row.status}</span>
+                cell: (row) => {
+                  const summary = disciplineSummaryFor(row);
+                  return (
+                    <div className="employee-status-stack">
+                      <span className={`status-pill status-${summary.suspended ? "offline" : row.status}`}>
+                        {summary.suspended ? "Suspended" : row.status}
+                      </span>
+                      {summary.criticalActive ? (
+                        <span className="employee-critical-warning">
+                          <AlertTriangle size={12} /> Critical
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                }
+              },
+              {
+                header: "Discipline",
+                cell: (row) => {
+                  const summary = disciplineSummaryFor(row);
+                  return summary.total ? `${summary.total} total / ${summary.active} active` : "None";
+                }
               },
               {
                 header: "Actions",
@@ -477,6 +535,7 @@ export function EmployeePage() {
           employee={selectedEmployee}
           isSaving={isSaving}
           uploadMessage={message}
+          violations={selectedEmployeeViolations}
           onEdit={() => selectedEmployee && void openEdit(selectedEmployee)}
           onUpload={uploadAsset}
         />
@@ -484,6 +543,7 @@ export function EmployeePage() {
 
       {/* Edit / Create modal */}
       {isModalOpen ? (
+        <Portal>
         <div className="modal-backdrop" role="presentation">
           <section
             className="command-card modal-panel employee-edit-modal"
@@ -614,22 +674,27 @@ export function EmployeePage() {
 
               <div className="form-row">
                 <label>
-                  Pay Rate {TRANSPORT_ROLES.includes(form!.role) ? "(Fixed %)" : ""}
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form!.salaryRate}
-                    onChange={(e) => setForm({ ...form!, salaryRate: e.target.value })}
-                    disabled={TRANSPORT_ROLES.includes(form!.role)}
-                  />
+                  Pay Rate
+                  <div style={{ display: "flex", alignItems: "center", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0 12px" }}>
+                    <span style={{ color: "var(--muted)", fontWeight: 600, fontSize: "0.9rem" }}>₱</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form!.salaryRate}
+                      onChange={(e) => setForm({ ...form!, salaryRate: e.target.value })}
+                      style={{ border: "none", background: "transparent", outline: "none", flex: 1, padding: "8px 8px" }}
+                    />
+                    {TRANSPORT_ROLES.includes(form!.role) && (
+                      <span style={{ color: "var(--muted)", fontWeight: 600, fontSize: "0.9rem" }}>%</span>
+                    )}
+                  </div>
                 </label>
                 <label>
                   Pay Schedule
                   <select
                     value={form!.salaryType}
                     onChange={(e) => setForm({ ...form!, salaryType: e.target.value as EmployeeSalaryType })}
-                    disabled={TRANSPORT_ROLES.includes(form!.role)}
                   >
                     <option value="daily">Daily</option>
                     <option value="monthly">Monthly</option>
@@ -649,6 +714,7 @@ export function EmployeePage() {
             </form>
           </section>
         </div>
+        </Portal>
       ) : null}
     </AppShell>
   );

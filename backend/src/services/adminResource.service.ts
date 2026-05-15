@@ -1,5 +1,5 @@
 import { firebasePaths } from "@pos-bus/shared";
-import type { AdminAccount, BusFleetRecord, ChatConversation, ChatMessage, EmployeeRecord, EmployeeRole } from "@pos-bus/shared";
+import type { AdminAccount, BusFleetRecord, ChatConversation, ChatMessage, EmployeeRecord, EmployeeRole, EmployeeViolationRecord, RemittanceRecord } from "@pos-bus/shared";
 import { realtimeDbService } from "./realtimeDb.service.js";
 import { firebaseService } from "./firebase.service.js";
 import { supabaseService } from "./supabase.service.js";
@@ -256,5 +256,62 @@ export const chatService = {
     });
 
     return { ...result.value, id: result.key };
+  }
+};
+
+export const remittanceService = {
+  async list() {
+    const rows = await supabaseService.listRemittances().catch(() => []);
+    if (rows.length) return rows;
+    // Firebase fallback
+    return listCollection<RemittanceRecord>(firebasePaths.remittances);
+  },
+
+  async create(payload: Partial<RemittanceRecord>, actor: string) {
+    void firebaseService.auditAction("remittance_create", actor, { conductorId: payload.conductorId });
+    const row = await supabaseService.createRemittance(payload);
+    if (row) {
+      await setRecord<RemittanceRecord>(firebasePaths.remittances, row.id, row);
+      return row;
+    }
+    return createRecord<Partial<RemittanceRecord>>(firebasePaths.remittances, payload);
+  },
+
+  async patch(id: string, payload: Partial<RemittanceRecord>, actor: string) {
+    void firebaseService.auditAction("remittance_patch", actor, { id });
+    const row = await supabaseService.patchRemittance(id, payload);
+    if (row) return row;
+    return patchRecord<RemittanceRecord>(firebasePaths.remittances, id, payload);
+  }
+};
+
+export const violationService = {
+  async list(employeeId?: string, status?: string) {
+    const rows = await supabaseService.listViolations(employeeId).catch(() => []);
+    if (rows.length) return status ? rows.filter((v) => v.status === status) : rows;
+    // Firebase fallback
+    const all = await listCollection<EmployeeViolationRecord>(firebasePaths.employeeViolations);
+    return all.filter((v) => {
+      const matchEmployee = !employeeId || v.employeeId === employeeId;
+      const matchStatus = !status || v.status === status;
+      return matchEmployee && matchStatus;
+    });
+  },
+
+  async create(payload: Partial<EmployeeViolationRecord>, actor: string) {
+    void firebaseService.auditAction("violation_create", actor, { employeeId: payload.employeeId });
+    const row = await supabaseService.createViolation(payload);
+    if (row) {
+      await setRecord<EmployeeViolationRecord>(firebasePaths.employeeViolations, row.id, row);
+      return row;
+    }
+    return createRecord<Partial<EmployeeViolationRecord>>(firebasePaths.employeeViolations, payload);
+  },
+
+  async patch(id: string, payload: Partial<EmployeeViolationRecord>, actor: string) {
+    void firebaseService.auditAction("violation_patch", actor, { id });
+    const row = await supabaseService.patchViolation(id, payload);
+    if (row) return row;
+    return patchRecord<EmployeeViolationRecord>(firebasePaths.employeeViolations, id, payload);
   }
 };

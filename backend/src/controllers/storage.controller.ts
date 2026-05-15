@@ -38,5 +38,28 @@ export const storageController = {
       actor(req)
     );
     res.status(201).json(envelope(assets, "firebase"));
+  },
+
+  async uploadBusPhoto(req: Request, res: Response) {
+    const { busId } = req.params;
+    const result = await storageService.uploadBusPhoto(
+      busId,
+      requestBodyBuffer(req.body),
+      req.header("content-type") || undefined,
+      actor(req)
+    );
+    res.status(201).json(envelope(result, "firebase"));
+  },
+
+  async uploadBusDocument(req: Request, res: Response) {
+    const { busId, docType } = req.params;
+    const result = await storageService.uploadBusDocument(
+      busId,
+      docType,
+      requestBodyBuffer(req.body),
+      req.header("content-type") || undefined,
+      actor(req)
+    );
+    res.status(201).json(envelope(result, "firebase"));
   }
 };

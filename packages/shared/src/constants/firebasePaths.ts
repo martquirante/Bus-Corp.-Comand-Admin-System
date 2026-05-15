@@ -18,7 +18,9 @@ export const firebasePaths = {
   buses: "AdminBuses",
   chatConversations: "AdminChatConversations",
   routeSuggestions: "AdminRouteSuggestions",
-  auditLogs: "AuditLogs/AdminActions"
+  auditLogs: "AuditLogs/AdminActions",
+  remittances: "Remittances",
+  employeeViolations: "EmployeeViolations"
 } as const;
 
 export const routePathByDirection = {

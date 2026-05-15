@@ -3,7 +3,9 @@ import type {
   CriticalAlert,
   DashboardStats,
   EmployeeRecord,
+  EmployeeViolationRecord,
   LegacyNotification,
+  RemittanceRecord,
   RevenueReport,
   RouteConfig,
   RouteWaypoint,
@@ -29,7 +31,9 @@ type TableName =
   | "notifications"
   | "conversations"
   | "chat_messages"
-  | "firebase_sync_logs";
+  | "firebase_sync_logs"
+  | "remittances"
+  | "employee_violations";
 
 type RowOptions = {
   eq?: { column: string; value: string };
@@ -53,7 +57,9 @@ const tableNames = new Set<TableName>([
   "notifications",
   "conversations",
   "chat_messages",
-  "firebase_sync_logs"
+  "firebase_sync_logs",
+  "remittances",
+  "employee_violations"
 ]);
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -241,21 +247,28 @@ const busFromRow = (row: AnyRecord): BusFleetRecord => ({
   seatingCapacity: row.seat_capacity ? toNumber(row.seat_capacity) : undefined,
   standingCapacity: row.standing_capacity ? toNumber(row.standing_capacity) : undefined,
   currentPassengerCount: row.current_passenger_count ? toNumber(row.current_passenger_count) : undefined,
-  status: ["maintenance", "offline"].includes(row.status)
+  status: ["maintenance", "offline", "available", "on-route"].includes(row.status)
     ? row.status
     : row.status === "out_of_service"
       ? "inactive"
       : "active",
   assignedDriverId: row.assigned_driver_id || undefined,
+  assignedDriverName: row.assigned_driver_name || undefined,
   assignedConductorId: row.assigned_conductor_id || undefined,
+  assignedConductorName: row.assigned_conductor_name || undefined,
   assignedRouteId: row.assigned_route_id || undefined,
+  routeLine: row.route_line || undefined,
   registrationNotes: row.registration_no || undefined,
+  registrationNumber: row.registration_no || undefined,
   insuranceInfo: row.insurance_info || undefined,
   permitInfo: row.permit_info || undefined,
   lastMaintenance: row.last_maintenance_at || undefined,
+  nextMaintenance: row.next_maintenance_at || undefined,
   odometer: row.odometer_km ? toNumber(row.odometer_km) : undefined,
   fuelType: row.fuel_type || undefined,
   photoUrl: row.main_photo_url || undefined,
+  photoPath: row.photo_path || undefined,
+  notes: row.notes || undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at
 });
@@ -345,6 +358,83 @@ const notificationFromRow = (row: AnyRecord): LegacyNotification => ({
   body: String(row.message || ""),
   timestamp: toTimestamp(row.created_at),
   read: Boolean(row.is_read)
+});
+
+const normalizeRemittanceStatus = (status?: string): string => {
+  if (!status) return "Pending";
+  const s = status.toLowerCase();
+  if (s === "cleared" || s === "received") return "Cleared";
+  if (s === "short" || s === "shortage") return "Short";
+  if (s === "over" || s === "overage") return "Over";
+  return "Pending";
+};
+
+const remittanceFromRow = (row: AnyRecord): RemittanceRecord => {
+  const expected = toNumber(row.expected_amount);
+  const remitted = toNumber(row.actual_remitted);
+  const shortageAmount = Math.max(expected - remitted, 0);
+  const overageAmount = Math.max(remitted - expected, 0);
+  const dbStatus = row.status || "Pending";
+  // Normalize to typed union
+  const status: RemittanceRecord["status"] =
+    dbStatus === "Cleared" ? "Cleared" :
+    dbStatus === "Short" ? "Short" :
+    dbStatus === "Over" ? "Over" : "Pending";
+  return {
+    id: String(row.id),
+    shiftDate: row.shift_date || "",
+    conductorId: row.conductor_id || undefined,
+    cashierId: row.cashier_id || undefined,
+    receivedById: row.cashier_id || undefined,
+    busId: row.bus_id || undefined,
+    routeId: row.route_id || undefined,
+    expectedAmount: expected,
+    remittedAmount: remitted,
+    shortageAmount,
+    overageAmount,
+    ticketCount: row.ticket_count ? toNumber(row.ticket_count) : undefined,
+    status,
+    notes: row.remarks || undefined,
+    submittedAt: row.submitted_at || undefined,
+    receivedAt: row.received_at || undefined,
+    proofImageUrl: row.proof_image_url || undefined,
+    proofImagePath: row.proof_image_path || undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at || undefined
+  };
+};
+
+const violationFromRow = (row: AnyRecord): EmployeeViolationRecord => ({
+  id: String(row.id),
+  employeeId: row.employee_id ? String(row.employee_id) : "",
+  employeeName: row.employee_name || undefined,
+  employeeNumber: row.employee_number || undefined,
+  employeeRole: row.employee_role || undefined,
+  role: row.employee_role || undefined,
+  busId: row.bus_id || undefined,
+  busNumber: row.bus_number || undefined,
+  routeId: row.route_id || undefined,
+  routeName: row.route_name || undefined,
+  remittanceId: row.remittance_id || undefined,
+  violationDate: row.violation_date || "",
+  incidentTime: row.incident_time || undefined,
+  violationType: row.violation_type || "",
+  description: row.description || undefined,
+  penalty: row.penalty || undefined,
+  penaltyType: row.penalty_type || row.penalty || undefined,
+  penaltyDetails: row.penalty_details || undefined,
+  suspensionDays: hasValue(row.suspension_days) ? toNumber(row.suspension_days) : undefined,
+  salaryDeductionAmount: hasValue(row.salary_deduction_amount) ? toNumber(row.salary_deduction_amount) : undefined,
+  deductionReason: row.deduction_reason || undefined,
+  penaltyStartDate: row.penalty_start_date || undefined,
+  penaltyEndDate: row.penalty_end_date || undefined,
+  evidenceNotes: row.evidence_notes || undefined,
+  severity: row.severity || undefined,
+  status: row.status || "Active",
+  reportedById: row.reported_by || undefined,
+  resolutionNotes: row.resolution_notes || undefined,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at || undefined
 });
 
 const ensureKnownTable = (table: TableName) => {
@@ -871,14 +961,21 @@ export const supabaseService = {
     if (payload.standingCapacity !== undefined) patch.standing_capacity = payload.standingCapacity;
     if (payload.currentPassengerCount !== undefined) patch.current_passenger_count = payload.currentPassengerCount;
     if (payload.assignedDriverId !== undefined) patch.assigned_driver_id = payload.assignedDriverId || null;
+    if (payload.assignedDriverName !== undefined) patch.assigned_driver_name = payload.assignedDriverName || null;
     if (payload.assignedConductorId !== undefined) patch.assigned_conductor_id = payload.assignedConductorId || null;
+    if (payload.assignedConductorName !== undefined) patch.assigned_conductor_name = payload.assignedConductorName || null;
     if (payload.assignedRouteId !== undefined) patch.assigned_route_id = payload.assignedRouteId || null;
+    if (payload.routeLine !== undefined) patch.route_line = payload.routeLine || null;
     if (payload.registrationNotes !== undefined) patch.registration_no = payload.registrationNotes;
+    if (payload.registrationNumber !== undefined) patch.registration_no = payload.registrationNumber;
     if (payload.insuranceInfo !== undefined) patch.insurance_info = payload.insuranceInfo;
     if (payload.permitInfo !== undefined) patch.permit_info = payload.permitInfo;
+    if (payload.lastMaintenance !== undefined) patch.last_maintenance_at = payload.lastMaintenance || null;
+    if (payload.nextMaintenance !== undefined) patch.next_maintenance_at = payload.nextMaintenance || null;
     if (payload.odometer !== undefined) patch.odometer_km = payload.odometer;
     if (payload.fuelType !== undefined) patch.fuel_type = payload.fuelType;
     if (payload.photoUrl !== undefined) patch.main_photo_url = payload.photoUrl;
+    if (payload.notes !== undefined) patch.notes = payload.notes || null;
     patch.updated_at = new Date().toISOString();
 
     const { data, error } = await supabaseAdmin.from("buses").update(patch).eq("id", id).select("*").single();
@@ -1142,5 +1239,163 @@ export const supabaseService = {
       tickets: ticketCount,
       payments: paymentCount
     };
+  },
+
+  // ─── Remittances ──────────────────────────────────────────────────────────
+
+  async listRemittances(): Promise<RemittanceRecord[]> {
+    try {
+      const rows = await rowsFromTable<AnyRecord>("remittances", { order: { column: "shift_date", ascending: false } });
+      return rows.map(remittanceFromRow);
+    } catch {
+      return [];
+    }
+  },
+
+  async createRemittance(payload: Partial<RemittanceRecord>): Promise<RemittanceRecord | null> {
+    if (!supabaseAdmin) return null;
+    const row: AnyRecord = {
+      conductor_id: payload.conductorId || null,
+      cashier_id: payload.cashierId || payload.receivedById || null,
+      shift_date: payload.shiftDate || new Date().toISOString().split("T")[0],
+      expected_amount: toNumber(payload.expectedAmount),
+      actual_remitted: toNumber(payload.remittedAmount),
+      status: normalizeRemittanceStatus(payload.status),
+      remarks: payload.notes || null
+    };
+    if (payload.busId !== undefined) row.bus_id = payload.busId || null;
+    if (payload.routeId !== undefined) row.route_id = payload.routeId || null;
+    if (payload.ticketCount !== undefined) row.ticket_count = payload.ticketCount;
+    if (payload.submittedAt !== undefined) row.submitted_at = payload.submittedAt || null;
+    if (payload.proofImageUrl !== undefined) row.proof_image_url = payload.proofImageUrl || null;
+    if (payload.proofImagePath !== undefined) row.proof_image_path = payload.proofImagePath || null;
+
+    const { data, error } = await supabaseAdmin.from("remittances").insert(row).select("*").single();
+    if (error) throw new AppError(502, "SUPABASE_REMITTANCE_CREATE_FAILED", error.message);
+    return remittanceFromRow(data);
+  },
+
+  async patchRemittance(id: string, payload: Partial<RemittanceRecord>): Promise<RemittanceRecord | null> {
+    if (!supabaseAdmin) return null;
+    const patch: AnyRecord = {};
+    if (payload.conductorId !== undefined) patch.conductor_id = payload.conductorId || null;
+    if (payload.cashierId !== undefined || payload.receivedById !== undefined) {
+      patch.cashier_id = payload.cashierId || payload.receivedById || null;
+    }
+    if (payload.shiftDate !== undefined) patch.shift_date = payload.shiftDate;
+    if (payload.expectedAmount !== undefined) patch.expected_amount = toNumber(payload.expectedAmount);
+    if (payload.remittedAmount !== undefined) patch.actual_remitted = toNumber(payload.remittedAmount);
+    if (payload.status !== undefined) patch.status = normalizeRemittanceStatus(payload.status);
+    if (payload.notes !== undefined) patch.remarks = payload.notes || null;
+    if (payload.busId !== undefined) patch.bus_id = payload.busId || null;
+    if (payload.routeId !== undefined) patch.route_id = payload.routeId || null;
+    if (payload.ticketCount !== undefined) patch.ticket_count = payload.ticketCount;
+    if (payload.receivedAt !== undefined) patch.received_at = payload.receivedAt || null;
+    if (payload.submittedAt !== undefined) patch.submitted_at = payload.submittedAt || null;
+    if (payload.proofImageUrl !== undefined) patch.proof_image_url = payload.proofImageUrl || null;
+    if (payload.proofImagePath !== undefined) patch.proof_image_path = payload.proofImagePath || null;
+    if (hasValue(patch.updated_at === undefined)) patch.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin.from("remittances").update(patch).eq("id", id).select("*").single();
+    if (error) throw new AppError(502, "SUPABASE_REMITTANCE_PATCH_FAILED", error.message);
+    return remittanceFromRow(data);
+  },
+
+  // ─── Employee Violations ──────────────────────────────────────────────────
+
+  async listViolations(employeeId?: string): Promise<EmployeeViolationRecord[]> {
+    try {
+      const rows = employeeId
+        ? await rowsFromTable<AnyRecord>("employee_violations", {
+            eq: { column: "employee_id", value: employeeId },
+            order: { column: "violation_date", ascending: false }
+          })
+        : await rowsFromTable<AnyRecord>("employee_violations", { order: { column: "violation_date", ascending: false } });
+      return rows.map(violationFromRow);
+    } catch {
+      return [];
+    }
+  },
+
+  async createViolation(payload: Partial<EmployeeViolationRecord>): Promise<EmployeeViolationRecord | null> {
+    if (!supabaseAdmin) return null;
+    const row: AnyRecord = {
+      employee_id: payload.employeeId,
+      violation_date: payload.violationDate || new Date().toISOString().split("T")[0],
+      violation_type: payload.violationType || "Other",
+      description: payload.description || null,
+      penalty: payload.penalty || null,
+      penalty_type: payload.penaltyType || payload.penalty || null,
+      penalty_details: payload.penaltyDetails || null,
+      suspension_days: payload.suspensionDays ?? 0,
+      salary_deduction_amount: payload.salaryDeductionAmount ?? 0,
+      deduction_reason: payload.deductionReason || null,
+      penalty_start_date: payload.penaltyStartDate || null,
+      penalty_end_date: payload.penaltyEndDate || null,
+      evidence_notes: payload.evidenceNotes || null,
+      remittance_id: payload.remittanceId || null,
+      incident_time: payload.incidentTime || null,
+      employee_number: payload.employeeNumber || null,
+      employee_name: payload.employeeName || null,
+      employee_role: payload.employeeRole || payload.role || null,
+      bus_id: payload.busId || null,
+      bus_number: payload.busNumber || null,
+      route_id: payload.routeId || null,
+      route_name: payload.routeName || null,
+      status: payload.status || "Active",
+      reported_by: payload.reportedById || null
+    };
+    if (payload.severity !== undefined) row.severity = payload.severity || null;
+    if (payload.resolutionNotes !== undefined) row.resolution_notes = payload.resolutionNotes || null;
+
+    const { data, error } = await supabaseAdmin.from("employee_violations").insert(row).select("*").single();
+    if (error) {
+      const hint = error.message.toLowerCase().includes("column")
+        ? " Run backend/sql/migration_employee_violations_disciplinary_fields.sql in Supabase SQL Editor."
+        : "";
+      throw new AppError(502, "SUPABASE_VIOLATION_CREATE_FAILED", `${error.message}${hint}`);
+    }
+    return violationFromRow(data);
+  },
+
+  async patchViolation(id: string, payload: Partial<EmployeeViolationRecord>): Promise<EmployeeViolationRecord | null> {
+    if (!supabaseAdmin) return null;
+    const patch: AnyRecord = {};
+    if (payload.employeeId !== undefined) patch.employee_id = payload.employeeId;
+    if (payload.employeeNumber !== undefined) patch.employee_number = payload.employeeNumber || null;
+    if (payload.employeeName !== undefined) patch.employee_name = payload.employeeName || null;
+    if (payload.employeeRole !== undefined || payload.role !== undefined) patch.employee_role = payload.employeeRole || payload.role || null;
+    if (payload.busId !== undefined) patch.bus_id = payload.busId || null;
+    if (payload.busNumber !== undefined) patch.bus_number = payload.busNumber || null;
+    if (payload.routeId !== undefined) patch.route_id = payload.routeId || null;
+    if (payload.routeName !== undefined) patch.route_name = payload.routeName || null;
+    if (payload.remittanceId !== undefined) patch.remittance_id = payload.remittanceId || null;
+    if (payload.violationDate !== undefined) patch.violation_date = payload.violationDate;
+    if (payload.incidentTime !== undefined) patch.incident_time = payload.incidentTime || null;
+    if (payload.violationType !== undefined) patch.violation_type = payload.violationType;
+    if (payload.description !== undefined) patch.description = payload.description || null;
+    if (payload.penalty !== undefined) patch.penalty = payload.penalty || null;
+    if (payload.penaltyType !== undefined) patch.penalty_type = payload.penaltyType || null;
+    if (payload.penaltyDetails !== undefined) patch.penalty_details = payload.penaltyDetails || null;
+    if (payload.suspensionDays !== undefined) patch.suspension_days = payload.suspensionDays || 0;
+    if (payload.salaryDeductionAmount !== undefined) patch.salary_deduction_amount = payload.salaryDeductionAmount || 0;
+    if (payload.deductionReason !== undefined) patch.deduction_reason = payload.deductionReason || null;
+    if (payload.penaltyStartDate !== undefined) patch.penalty_start_date = payload.penaltyStartDate || null;
+    if (payload.penaltyEndDate !== undefined) patch.penalty_end_date = payload.penaltyEndDate || null;
+    if (payload.evidenceNotes !== undefined) patch.evidence_notes = payload.evidenceNotes || null;
+    if (payload.status !== undefined) patch.status = payload.status;
+    if (payload.reportedById !== undefined) patch.reported_by = payload.reportedById || null;
+    if (payload.severity !== undefined) patch.severity = payload.severity || null;
+    if (payload.resolutionNotes !== undefined) patch.resolution_notes = payload.resolutionNotes || null;
+    patch.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin.from("employee_violations").update(patch).eq("id", id).select("*").single();
+    if (error) {
+      const hint = error.message.toLowerCase().includes("column")
+        ? " Run backend/sql/migration_employee_violations_disciplinary_fields.sql in Supabase SQL Editor."
+        : "";
+      throw new AppError(502, "SUPABASE_VIOLATION_PATCH_FAILED", `${error.message}${hint}`);
+    }
+    return violationFromRow(data);
   }
 };

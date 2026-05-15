@@ -1,4 +1,4 @@
-import type { EmployeeAssetInfo, EmployeeAssetKey, EmployeeAssetsResponse, EmployeeRecord } from "@pos-bus/shared";
+import type { BusFleetRecord, EmployeeAssetInfo, EmployeeAssetKey, EmployeeAssetsResponse, EmployeeRecord } from "@pos-bus/shared";
 import { supabaseAdmin } from "../config/supabase.js";
 import { AppError } from "../utils/appError.js";
 import { employeeService } from "./adminResource.service.js";
@@ -172,6 +172,104 @@ export const storageService = {
     await employeeService.patch(employee.id, patch, actor);
 
     return await this.getEmployeeAssets(employee.id);
+  },
+
+  async uploadBusPhoto(
+    busId: string,
+    body: Buffer,
+    contentType: string | undefined,
+    actor: string
+  ): Promise<{ busId: string; photoPath: string; photoUrl: string }> {
+    if (!supabaseAdmin) {
+      throw new AppError(
+        503,
+        "SUPABASE_STORAGE_NOT_CONFIGURED",
+        "Supabase Storage is not configured. " +
+          "Set SUPABASE_SERVICE_ROLE_KEY in backend/.env (get it from Supabase Dashboard → Settings → API → service_role key). " +
+          "Also make sure the 'bus-files' bucket exists in your Supabase project under Storage."
+      );
+    }
+
+    if (!body.length) throw new AppError(400, "EMPTY_UPLOAD", "Uploaded file is empty.");
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp", "image/jpg"];
+    const resolvedContentType = contentType || "image/png";
+    if (!allowedTypes.includes(resolvedContentType)) {
+      throw new AppError(400, "INVALID_CONTENT_TYPE", `Unsupported image type: ${resolvedContentType}. Allowed: png, jpeg, webp.`);
+    }
+
+    const bucket = supabaseAdmin.storage.from("bus-files");
+    const photoPath = `buses/${busId}/main-photo.png`;
+
+    const { error: uploadError } = await bucket.upload(photoPath, body, {
+      contentType: resolvedContentType,
+      cacheControl: "0",
+      upsert: true
+    });
+
+    if (uploadError) {
+      if (uploadError.message?.toLowerCase().includes("bucket") || uploadError.message?.toLowerCase().includes("not found")) {
+        throw new AppError(
+          502,
+          "BUS_STORAGE_BUCKET_NOT_FOUND",
+          "Supabase bucket 'bus-files' does not exist. Please create it in your Supabase Dashboard under Storage → Buckets."
+        );
+      }
+      throw new AppError(502, "SUPABASE_BUS_UPLOAD_FAILED", uploadError.message);
+    }
+
+    const { data: publicData } = bucket.getPublicUrl(photoPath);
+    const photoUrl = publicData.publicUrl;
+
+    // Only the visible URL is required by the current buses schema.
+    // Some deployments do not have the optional photo_path column.
+    const { busFleetService } = await import("./adminResource.service.js");
+    await busFleetService.patch(busId, { photoUrl }, actor);
+
+    return { busId, photoPath, photoUrl };
+  },
+
+  async uploadBusDocument(
+    busId: string,
+    docType: string,
+    body: Buffer,
+    contentType: string | undefined,
+    actor: string
+  ): Promise<{ busId: string; docType: string; docPath: string; docUrl: string }> {
+    if (!supabaseAdmin) {
+      throw new AppError(
+        503,
+        "SUPABASE_STORAGE_NOT_CONFIGURED",
+        "Supabase Storage is not configured."
+      );
+    }
+
+    if (!body.length) throw new AppError(400, "EMPTY_UPLOAD", "Uploaded file is empty.");
+
+    const bucket = supabaseAdmin.storage.from("bus-files");
+    const ext = contentType === "application/pdf" ? "pdf" : "png";
+    const docPath = `buses/${busId}/${docType}.${ext}`;
+
+    const { error: uploadError } = await bucket.upload(docPath, body, {
+      contentType: contentType || "application/pdf",
+      cacheControl: "0",
+      upsert: true
+    });
+
+    if (uploadError) throw new AppError(502, "SUPABASE_BUS_UPLOAD_FAILED", uploadError.message);
+
+    const { data: publicData } = bucket.getPublicUrl(docPath);
+    const docUrl = publicData.publicUrl;
+
+    const patch: Partial<BusFleetRecord> = {};
+    if (docType === "registration") patch.registrationNumber = docUrl;
+    if (docType === "permit") patch.permitInfo = docUrl;
+    if (docType === "insurance") patch.insuranceInfo = docUrl;
+
+    const { busFleetService } = await import("./adminResource.service.js");
+    await busFleetService.patch(busId, patch, actor);
+
+    return { busId, docType, docPath, docUrl };
   }
 };
 

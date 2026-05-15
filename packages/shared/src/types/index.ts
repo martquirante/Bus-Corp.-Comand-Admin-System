@@ -66,6 +66,8 @@ export interface FleetBus {
   passengers: number;
   lastUpdate: number;
   heading?: number;
+  odometer?: number;
+  distanceKm?: number;
   busType?: BusType | string;
   assignedRouteId?: string;
   lineId?: MainRouteLineId;
@@ -376,6 +378,8 @@ export interface EmployeeAssetsResponse {
   employee?: EmployeeRecord;
 }
 
+export type BusFuelType = "diesel" | "hybrid" | "electric" | string;
+
 export interface BusFleetRecord {
   id: string;
   busNumber: string;
@@ -393,18 +397,122 @@ export interface BusFleetRecord {
   seatingCapacity?: number;
   standingCapacity?: number;
   currentPassengerCount?: number;
-  status: "active" | "maintenance" | "inactive" | "offline";
+
+  /** active | available | on-route | maintenance | inactive | offline */
+  status: "active" | "available" | "on-route" | "maintenance" | "inactive" | "offline";
+
   assignedDriverId?: string;
+  assignedDriverName?: string;
   assignedConductorId?: string;
+  assignedConductorName?: string;
   assignedRouteId?: string;
+
+  /** Legacy alias for registrationNotes */
   registrationNotes?: string;
+  registrationNumber?: string;
+
   ltfrbRouteNote?: string;
   insuranceInfo?: string;
   permitInfo?: string;
   lastMaintenance?: string;
+  nextMaintenance?: string;
   odometer?: number;
-  fuelType?: string;
+
+  /** diesel | hybrid | electric */
+  fuelType?: BusFuelType;
+
   photoUrl?: string;
+  photoPath?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Maps to the existing `remittances` SQL table */
+export interface RemittanceRecord {
+  id: string;
+  /** shift_date */
+  shiftDate: string;
+  /** conductor_id */
+  conductorId?: string;
+  /** Resolved name (not in DB — computed by join or frontend) */
+  conductorName?: string;
+  /** cashier_id */
+  cashierId?: string;
+  receivedById?: string;
+  receivedByName?: string;
+  /** bus_id (optional column) */
+  busId?: string;
+  busNumber?: string;
+  /** route_id (optional column) */
+  routeId?: string;
+  routeName?: string;
+  /** expected_amount */
+  expectedAmount: number;
+  /** actual_remitted */
+  remittedAmount: number;
+  /** Computed: max(expected - remitted, 0) */
+  shortageAmount?: number;
+  /** Computed: max(remitted - expected, 0) */
+  overageAmount?: number;
+  /** ticket_count (optional column) */
+  ticketCount?: number;
+  /**
+   * status values in DB: Pending | Cleared | Short | Over
+   * (capital first letter to match existing CHECK constraint)
+   */
+  status: "Pending" | "Cleared" | "Short" | "Over";
+  /** remarks */
+  notes?: string;
+  /** submitted_at (optional column) */
+  submittedAt?: string;
+  /** received_at (optional column) */
+  receivedAt?: string;
+  /** proof_image_url (optional column) */
+  proofImageUrl?: string;
+  /** proof_image_path (optional column) */
+  proofImagePath?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Maps to the existing `employee_violations` SQL table */
+export interface EmployeeViolationRecord {
+  id: string;
+  /** employee_id */
+  employeeId: string;
+  employeeName?: string;
+  employeeNumber?: string;
+  employeeRole?: string;
+  role?: string;
+  busId?: string;
+  busNumber?: string;
+  routeId?: string;
+  routeName?: string;
+  remittanceId?: string;
+  /** violation_date */
+  violationDate: string;
+  incidentTime?: string;
+  /** violation_type */
+  violationType: string;
+  description?: string;
+  penalty?: string;
+  penaltyType?: string;
+  penaltyDetails?: string;
+  suspensionDays?: number;
+  salaryDeductionAmount?: number;
+  deductionReason?: string;
+  penaltyStartDate?: string;
+  penaltyEndDate?: string;
+  evidenceNotes?: string;
+  /** severity (optional column: minor | major | critical) */
+  severity?: "minor" | "major" | "critical" | string;
+  status?: string;
+  /** reported_by */
+  reportedById?: string;
+  reportedByName?: string;
+  /** resolution_notes (optional column) */
+  resolutionNotes?: string;
   createdAt?: string;
   updatedAt?: string;
 }

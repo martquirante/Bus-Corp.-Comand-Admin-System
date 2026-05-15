@@ -25,6 +25,29 @@ const toOptionalText = (...values: unknown[]) => {
   return undefined;
 };
 
+const firstFiniteNumber = (...values: unknown[]) => {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return undefined;
+};
+
+const getLiveDistanceKm = (live: AnyRecord) =>
+  firstFiniteNumber(
+    live.odometerKm,
+    live.odometer,
+    live.totalDistanceKm,
+    live.distanceTraveledKm,
+    live.distanceTravelledKm,
+    live.tripDistanceKm,
+    live.distanceKm,
+    live.mileageKm,
+    live.kmRun,
+    live.kilometersRun
+  );
+
 const isOnline = (lastUpdate: number) => Date.now() - lastUpdate < 300000;
 
 const isValidCoordinate = (lat: unknown, lng: unknown) => {
@@ -95,6 +118,7 @@ export const extractFleet = (root: AnyRecord): FleetBus[] => {
     const gcash = toNumber(live.totalGcash);
     const passengers =
       toNumber(live.regularCount) + toNumber(live.studentCount) + toNumber(live.seniorCount);
+    const liveDistanceKm = getLiveDistanceKm(live);
 
     const transformed: FleetBus = {
       id: deviceId,
@@ -114,6 +138,8 @@ export const extractFleet = (root: AnyRecord): FleetBus[] => {
       passengers,
       lastUpdate,
       heading: Number.isFinite(Number(live.heading)) ? Number(live.heading) : undefined,
+      odometer: liveDistanceKm,
+      distanceKm: liveDistanceKm,
       assignedRouteId: toOptionalText(
         live.assignedRouteId,
         live.routeId,

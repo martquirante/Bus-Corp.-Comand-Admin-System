@@ -7,7 +7,9 @@ import {
   ReceiptText,
   Route,
   ShieldCheck,
-  UsersRound
+  UsersRound,
+  DollarSign,
+  AlertTriangle
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -23,7 +25,9 @@ export const navItems: Array<{
   { href: "/transaction-logs", label: "Transaction Logs", icon: ReceiptText },
   { href: "/route-config", label: "Route Config", icon: Route },
   { href: "/bus-fleet", label: "Bus Fleet Management", icon: BusFront },
-  { href: "/employees", label: "Employee", icon: IdCard },
+  { href: "/remittances", label: "Remittances", icon: DollarSign },
+  { href: "/employees", label: "Employees", icon: IdCard },
+  { href: "/violations", label: "Violations", icon: AlertTriangle },
   { href: "/admin-tools", label: "Admin Tools", icon: ShieldCheck },
   { href: "/dashboard", label: "Fleet Desk", icon: UsersRound, secondary: true }
 ] as const;

@@ -6,6 +6,7 @@ import { Edit3, KeyRound, Plus, Power, RefreshCcw, ShieldCheck, UserCog, Users, 
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
+import { Portal } from "@/components/ui/Portal";
 import { DataTable } from "@/components/ui/DataTable";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -460,6 +461,7 @@ export function AdminToolsPage() {
 
       {/* Edit modal */}
       {editing ? (
+        <Portal>
         <div className="modal-backdrop" role="presentation">
           <section
             className="command-card modal-panel"
@@ -538,6 +540,7 @@ export function AdminToolsPage() {
             </form>
           </section>
         </div>
+        </Portal>
       ) : null}
     </AppShell>
   );
