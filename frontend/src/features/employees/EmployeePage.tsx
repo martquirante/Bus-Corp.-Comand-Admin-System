@@ -14,6 +14,7 @@ type EmployeeEditForm = {
   fullName: string;
   role: EmployeeRole;
   phone: string;
+  email: string;
   address: string;
   assignedBus: string;
   assignedRoute: string;
@@ -31,8 +32,8 @@ type RoleFilter = "all" | EmployeeRole;
 type StatusFilter = "all" | "active" | "inactive" | "pending";
 
 const defaultSalary = (role: EmployeeRole) => {
-  if (role === "driver") return { salaryRate: "12", salaryType: "commission" as const };
-  if (role === "conductor") return { salaryRate: "10", salaryType: "commission" as const };
+  if (role === "driver") return { salaryRate: "15", salaryType: "commission" as const };
+  if (role === "conductor") return { salaryRate: "12", salaryType: "commission" as const };
   return { salaryRate: "0", salaryType: "daily" as const };
 };
 
@@ -43,6 +44,7 @@ const employeeToForm = (employee: EmployeeRecord): EmployeeEditForm => {
   return {
     employeeNumber: employee.employeeNumber || "",
     fullName: employee.fullName || "",
+    email: employee.email || "",
     role: employee.role,
     phone: employee.phone || "",
     address: employee.address || "",
@@ -57,6 +59,7 @@ const employeeToForm = (employee: EmployeeRecord): EmployeeEditForm => {
 const formToPayload = (form: EmployeeEditForm): Partial<EmployeeRecord> => ({
   employeeNumber: form.employeeNumber,
   fullName: form.fullName,
+  email: form.email,
   role: form.role,
   phone: form.phone,
   address: form.address,
@@ -118,7 +121,11 @@ const EMPTY_ROWS: EmployeeRecord[] = [];
 
 export function EmployeePage() {
   const loadEmployees = useCallback(() => api.employees(), []);
+  const loadBuses = useCallback(() => api.buses(), []);
+  
   const employees = useApiResource(loadEmployees);
+  const buses = useApiResource(loadBuses);
+  
   const rows = employees.data || EMPTY_ROWS;
 
   const [selected, setSelected] = useState<EmployeeRecord | null>(null);
@@ -185,15 +192,37 @@ export function EmployeePage() {
     setForm({
       employeeNumber: "",
       fullName: "",
+      email: "",
       role: "driver",
       phone: "",
       address: "",
       assignedBus: "",
       assignedRoute: "",
-      salaryRate: "12",
+      salaryRate: "15",
       salaryType: "commission",
       status: "active"
     });
+  };
+
+  const validateBusAssignment = () => {
+    if (!form) return true;
+    if (form.role !== "driver" && form.role !== "conductor") return true;
+    if (!form.assignedBus) return true;
+    if (form.status !== "active") return true; // Only validate active employees
+
+    // Find other active employees assigned to this bus with the SAME role
+    const conflict = rows.find(emp => 
+      emp.id !== editing?.id && 
+      emp.status === "active" &&
+      emp.role === form.role && 
+      (emp.assignedBus === form.assignedBus || emp.assignedBusId === form.assignedBus)
+    );
+
+    if (conflict) {
+      setMessage(`Validation Error: Bus ${form.assignedBus} already has an active ${form.role} assigned (${conflict.fullName || conflict.employeeNumber}). A bus can only have one active driver and one active conductor.`);
+      return false;
+    }
+    return true;
   };
 
   const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
@@ -201,6 +230,11 @@ export function EmployeePage() {
     if (!editing || !form) return;
     setIsSaving(true);
     setMessage(null);
+
+    if (!validateBusAssignment()) {
+      setIsSaving(false);
+      return;
+    }
 
     try {
       const result = await api.patchEmployee(editing.id, formToPayload(form));
@@ -220,6 +254,11 @@ export function EmployeePage() {
     if (!form) return;
     setIsSaving(true);
     setMessage(null);
+
+    if (!validateBusAssignment()) {
+      setIsSaving(false);
+      return;
+    }
 
     try {
       const result = await api.createEmployee(formToPayload(form));
@@ -282,12 +321,14 @@ export function EmployeePage() {
   const updateRole = (role: EmployeeRole) => {
     if (!form) return;
     const salary = defaultSalary(role);
-    const shouldReplaceSalary = !form.salaryRate || form.salaryRate === "0" || form.salaryType !== "commission";
+    const isTransport = role === "driver" || role === "conductor";
     setForm({
       ...form,
       role,
-      salaryRate: shouldReplaceSalary ? salary.salaryRate : form.salaryRate,
-      salaryType: shouldReplaceSalary ? salary.salaryType : form.salaryType
+      assignedBus: isTransport ? form.assignedBus : "",
+      assignedRoute: isTransport ? form.assignedRoute : "",
+      salaryRate: isTransport ? salary.salaryRate : form.salaryRate,
+      salaryType: isTransport ? salary.salaryType : form.salaryType
     });
   };
 
@@ -310,6 +351,26 @@ export function EmployeePage() {
     setForm(null);
     setMessage(null);
   };
+
+  // Filter buses to only show those not yet occupied by an active employee with the same role
+  const availableBuses = useMemo(() => {
+    if (!buses.data || !form) return [];
+    
+    return buses.data.filter((bus) => {
+      // Is there another active employee with the SAME role already assigned to this bus?
+      const isOccupied = rows.some((emp) => 
+        emp.id !== editing?.id &&
+        emp.status === "active" &&
+        emp.role === form.role &&
+        (emp.assignedBus === bus.busNumber || emp.assignedBusId === bus.busNumber)
+      );
+      
+      // Also allow it if the *currently editing* employee is already assigned to it
+      const isCurrentAssignment = editing?.assignedBus === bus.busNumber || editing?.assignedBusId === bus.busNumber;
+      
+      return !isOccupied || isCurrentAssignment;
+    });
+  }, [buses.data, form?.role, editing?.id, editing?.assignedBus, editing?.assignedBusId, rows]);
 
   const isModalOpen = (editing !== null || isCreating) && form !== null;
 
@@ -496,6 +557,18 @@ export function EmployeePage() {
                   />
                 </label>
                 <label>
+                  Email
+                  <input
+                    type="email"
+                    value={form!.email}
+                    onChange={(e) => setForm({ ...form!, email: e.target.value })}
+                    placeholder="employee@posbus.com"
+                  />
+                </label>
+              </div>
+
+              <div className="form-row" style={{ gridTemplateColumns: '1fr' }}>
+                <label>
                   Address
                   <input
                     value={form!.address}
@@ -510,11 +583,17 @@ export function EmployeePage() {
                 <div className="form-row">
                   <label>
                     Assigned Bus
-                    <input
+                    <select
                       value={form!.assignedBus}
                       onChange={(e) => setForm({ ...form!, assignedBus: e.target.value })}
-                      placeholder="e.g. BUS 314"
-                    />
+                    >
+                      <option value="">Not assigned</option>
+                      {availableBuses.map((bus) => (
+                        <option key={bus.id} value={bus.busNumber}>
+                          {bus.busNumber} {bus.plateNumber ? `(${bus.plateNumber})` : ""}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label>
                     Assigned Route
@@ -535,13 +614,14 @@ export function EmployeePage() {
 
               <div className="form-row">
                 <label>
-                  Pay Rate
+                  Pay Rate {TRANSPORT_ROLES.includes(form!.role) ? "(Fixed %)" : ""}
                   <input
                     type="number"
                     min="0"
                     step="0.01"
                     value={form!.salaryRate}
                     onChange={(e) => setForm({ ...form!, salaryRate: e.target.value })}
+                    disabled={TRANSPORT_ROLES.includes(form!.role)}
                   />
                 </label>
                 <label>
@@ -549,6 +629,7 @@ export function EmployeePage() {
                   <select
                     value={form!.salaryType}
                     onChange={(e) => setForm({ ...form!, salaryType: e.target.value as EmployeeSalaryType })}
+                    disabled={TRANSPORT_ROLES.includes(form!.role)}
                   >
                     <option value="daily">Daily</option>
                     <option value="monthly">Monthly</option>

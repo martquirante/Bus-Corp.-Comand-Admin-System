@@ -36,6 +36,17 @@ const issuedToday = () =>
 /** Roles that have an assigned bus / route on the ID */
 const TRANSPORT_ROLES: (EmployeeRecord["role"] | string)[] = ["driver", "conductor"];
 
+const getRoleReminder = (role?: string) => {
+  const r = role?.toLowerCase() || "";
+  if (r.includes("driver")) return "Prioritize passenger safety at all times. Strictly obey all traffic laws and avoid reckless driving.";
+  if (r.includes("conductor")) return "Ensure accurate fare collection and ticket issuance using the POS system. Always provide the exact change and assist passengers courteously.";
+  if (r.includes("inspector")) return "Conduct thorough and fair ticket inspections. Promptly report any trip irregularities or fare discrepancies to the Admin.";
+  if (r.includes("mechanic") || r.includes("maintenance")) return "Ensure all buses are in a safe and roadworthy condition before dispatch. Accurately log all inspections and repairs.";
+  if (r.includes("dispatcher")) return "Ensure buses depart on time and maintain proper dispatch intervals. Keep the terminal organized and manage passenger queues efficiently.";
+  if (r.includes("admin") || r.includes("staff")) return "Maintain the confidentiality and security of company data. Ensure smooth operations and provide continuous support to all deployed personnel.";
+  return "Always act in the best interest of the company and provide excellent service to our passengers.";
+};
+
 export function employeeQrPayload(employee: EmployeeRecord | null) {
   if (!employee) return "";
   // Return a nicely formatted text string for generic scanners
@@ -147,12 +158,12 @@ export function EmployeeIdCard({
           {/* Info grid */}
           <section className="id-info-grid">
             <div>
-              <span>Phone</span>
-              <strong>{display(employee?.phone, "09XX XXX XXXX")}</strong>
+              <span>Email</span>
+              <strong>{display(employee?.email, "Not set")}</strong>
             </div>
             <div>
-              <span>Address</span>
-              <strong>{display(employee?.address, "Address not set")}</strong>
+              <span>Phone</span>
+              <strong>{display(employee?.phone, "09XX XXX XXXX")}</strong>
             </div>
 
             {isTransportRole && (
@@ -178,11 +189,6 @@ export function EmployeeIdCard({
                 </strong>
               </div>
             )}
-
-            <div className="id-status-box">
-              <span>Status</span>
-              <strong>{display(employee?.status, "Pending").toUpperCase()}</strong>
-            </div>
           </section>
 
           {/* Footer */}
@@ -212,30 +218,46 @@ export function EmployeeIdCard({
         {/* ── BACK ── */}
         <article className="employee-id-card employee-id-back" ref={backRef}>
           <div className="id-holographic-foil" />
+          
+          <div className="id-back-content">
+            <div className="id-back-text-container">
+              <section className="id-back-section">
+                <h6>IMPORTANT NOTICE</h6>
+                <ul>
+                  <li>This ID card is the official property of Bus Liner.</li>
+                  <li>It is strictly non-transferable and must be worn visibly at all times while on duty.</li>
+                  <li>In case of loss, report immediately to the HR or Admin Office.</li>
+                  <li>If found, please return to: Terminal Office or call 09XX XXX XXXX.</li>
+                </ul>
+              </section>
 
-          {/* Just the QR Panel in the center */}
-          <section className="id-qr-panel">
-            <div className="id-qr-title-bar">
-              <strong>{employee?.fullName || "Employee"}</strong>
-              <span>{employeeNumber}</span>
+              <section className="id-back-section">
+                <h6>RULES AND REGULATIONS</h6>
+                <ul>
+                  <li>Maintain a high standard of professionalism, respect, and courtesy toward passengers and co-workers.</li>
+                  <li>The consumption of alcohol or use of illegal drugs before and during duty hours is strictly prohibited.</li>
+                  <li>Properly handle and care for all company vehicles and equipment, including POS terminals.</li>
+                  <li>Observe punctuality and strictly adhere to your assigned schedule and route.</li>
+                </ul>
+              </section>
+
+              <section className="id-back-section id-role-reminder">
+                <h6>REMINDER</h6>
+                <p>{getRoleReminder(employee?.role)}</p>
+              </section>
             </div>
 
-            <div className="id-qr-frame">
-              {qrDataUrl ? (
-                <img src={qrDataUrl} alt="Employee verification QR code" />
-              ) : (
-                <span className="id-qr-placeholder">QR</span>
-              )}
-              {/* Logo overlay in QR centre */}
-              <div className="id-qr-logo-overlay">
-                <img src={logoPath} alt="POS BUS" />
+            <section className="id-qr-panel-small">
+              <div className="id-qr-frame-small">
+                {qrDataUrl ? (
+                  <img src={qrDataUrl} alt="Employee verification QR code" />
+                ) : (
+                  <span className="id-qr-placeholder-small">QR</span>
+                )}
               </div>
-            </div>
-
-            <p className="id-qr-scan-note">
-              SCAN TO VERIFY EMPLOYEE IDENTITY · {employee?.role?.toUpperCase()}
-            </p>
-          </section>
+              <p className="id-qr-scan-note-small">SCAN TO VERIFY</p>
+            </section>
+          </div>
         </article>
 
       </div>
