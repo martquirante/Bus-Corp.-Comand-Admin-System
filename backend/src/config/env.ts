@@ -4,7 +4,8 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(5000),
-  ADMIN_WEB_ORIGIN: z.string().default("http://localhost:3000"),
+  HOST: z.string().default("0.0.0.0"),
+  ADMIN_WEB_ORIGIN: z.string().default("http://localhost:3000,http://127.0.0.1:3000"),
   SESSION_SECRET: z.string().default("local-development-session-secret"),
   AUTH_MODE: z.enum(["dev", "production"]).default("dev"),
   REQUIRE_FIREBASE_ID_TOKEN: z.coerce.boolean().default(false),

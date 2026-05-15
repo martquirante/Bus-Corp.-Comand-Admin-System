@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useMemo, useState } from "react";
 import type { BusFleetRecord, EmployeeRecord, RemittanceRecord, RouteConfig } from "@pos-bus/shared";
 import {
-  AlertCircle, CheckCircle2, Clock, DollarSign, Plus,
+  AlertCircle, CheckCircle2, Clock, PhilippinePeso, Plus,
   Search, TrendingDown, X
 } from "lucide-react";
 import { api } from "@/services/api";
@@ -278,12 +278,12 @@ export function RemittancesPage() {
       {/* ── Summary Stats ── */}
       <div className="stats-grid compact-grid rem-stats">
         <div className="stat-card tone-blue">
-          <DollarSign size={18} className="stat-icon" />
+          <PhilippinePeso size={18} className="stat-icon" />
           <strong>{fmt(stats.totalExpected)}</strong>
           <p>Expected Today</p>
         </div>
         <div className="stat-card tone-green">
-          <CheckCircle2 size={18} className="stat-icon" />
+          <PhilippinePeso size={18} className="stat-icon" />
           <strong>{fmt(stats.totalRemitted)}</strong>
           <p>Remitted Today</p>
         </div>
@@ -343,12 +343,12 @@ export function RemittancesPage() {
               <span>{filteredRows.length} records</span>
               <h2>Remittance Log</h2>
             </div>
-            <DollarSign size={20} />
+            <PhilippinePeso size={20} />
           </div>
 
           {filteredRows.length === 0 ? (
             <div className="fleet-empty">
-              <DollarSign size={32} />
+              <PhilippinePeso size={32} />
               <p>No remittance records found.</p>
             </div>
           ) : (
@@ -386,7 +386,7 @@ export function RemittancesPage() {
         <section className="command-card fleet-detail-panel">
           {!selectedRecord ? (
             <div className="fleet-detail-empty">
-              <DollarSign size={48} />
+              <PhilippinePeso size={48} />
               <p>Select a remittance record to view details.</p>
             </div>
           ) : (

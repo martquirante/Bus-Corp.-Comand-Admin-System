@@ -20,12 +20,27 @@ import type {
   TransactionLog
 } from "@pos-bus/shared";
 
+const resolveDefaultApiOrigin = () => {
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+    if (!isLocalHost) {
+      return `${protocol}//${hostname}:5000`;
+    }
+  }
+
+  return "http://localhost:5000";
+};
+
 const normalizeApiBaseUrl = (value?: string) => {
-  const base = (value || "http://localhost:5000").replace(/\/+$/, "");
+  const base = (value || resolveDefaultApiOrigin()).replace(/\/+$/, "");
   return base.endsWith("/api") ? base : `${base}/api`;
 };
 
 const API_BASE_URL = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+const parsedApiTimeoutMs = Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS || 10000);
+const API_TIMEOUT_MS = Number.isFinite(parsedApiTimeoutMs) && parsedApiTimeoutMs > 0 ? parsedApiTimeoutMs : 10000;
 const SESSION_KEY = "posBusAdminSession";
 
 type SessionPayload = {
@@ -132,10 +147,38 @@ const getToken = () => {
 
 export const getSessionToken = getToken;
 
+const unreachableApiMessage = () =>
+  `Backend API is not reachable. Check NEXT_PUBLIC_API_BASE_URL and backend server. Current API: ${API_BASE_URL}.`;
+
+const isNetworkError = (error: unknown) =>
+  error instanceof TypeError ||
+  (error instanceof DOMException && error.name === "AbortError") ||
+  (error instanceof Error && error.name === "AbortError");
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: init?.signal || controller.signal
+    });
+  } catch (error) {
+    if (isNetworkError(error)) {
+      throw new Error(unreachableApiMessage());
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T>> {
   const token = getToken();
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -157,7 +200,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelop
 async function apiUpload<T>(path: string, file: Blob, contentType?: string): Promise<ApiEnvelope<T>> {
   const token = getToken();
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

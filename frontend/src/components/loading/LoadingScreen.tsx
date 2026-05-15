@@ -25,28 +25,17 @@ export function LoadingScreen() {
           <span>Preparing live operations view</span>
         </div>
       </div>
-      <div className="loading-video-shell" aria-hidden="true">
-        <span className="loading-smoke smoke-one" />
-        <span className="loading-smoke smoke-two" />
-        <video autoPlay muted loop playsInline preload="auto" className="loading-video">
-          <source src="/assets/loading-screen/loading_screen-video.webm" type="video/webm" />
-        </video>
-      </div>
       <div className="loading-route" aria-hidden="true">
         <span className="loading-dot" />
         <span className="loading-line" />
-        <motion.span
-          className="loading-bus"
-          animate={{ x: [0, 210, 0] }}
-          transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <Image
-            src="/assets/bus/blue-aircon/bus-blue-aircon-front-left.png"
-            width={88}
-            height={58}
-            alt=""
-          />
-        </motion.span>
+        <Image
+          src="/assets/loading-screen/bus_loading-screen.png"
+          width={132}
+          height={80}
+          alt="Loading bus"
+          className="loading-bus-image"
+          priority
+        />
       </div>
     </motion.div>
   );

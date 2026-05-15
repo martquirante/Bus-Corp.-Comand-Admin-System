@@ -11,10 +11,12 @@ import { Skeleton } from "@/components/ui/Skeleton";
 export function AppShell({
   title,
   kicker,
+  mainClassName,
   children
 }: {
   title: string;
   kicker?: string;
+  mainClassName?: string;
   children: ReactNode;
 }) {
   const { session, isReady } = useAuth();
@@ -34,7 +36,7 @@ export function AppShell({
   return (
     <div className="app-frame">
       <Sidebar />
-      <div className="app-main">
+      <div className={`app-main${mainClassName ? ` ${mainClassName}` : ""}`}>
         <Topbar title={title} kicker={kicker} />
         <motion.main
           className="page-surface"

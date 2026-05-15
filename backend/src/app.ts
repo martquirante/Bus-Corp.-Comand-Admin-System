@@ -30,12 +30,15 @@ import { remittancesRoutes } from "./routes/remittances.routes.js";
 import { employeeViolationsRoutes } from "./routes/employeeViolations.routes.js";
 
 export const app = express();
+const allowedOrigins = env.ADMIN_WEB_ORIGIN.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(
   cors({
-    origin: env.ADMIN_WEB_ORIGIN.split(",").map((origin) => origin.trim()),
+    origin: allowedOrigins,
     credentials: true
   })
 );

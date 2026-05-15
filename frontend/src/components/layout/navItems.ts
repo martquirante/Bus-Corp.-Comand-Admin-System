@@ -8,7 +8,7 @@ import {
   Route,
   ShieldCheck,
   UsersRound,
-  DollarSign,
+  PhilippinePeso,
   AlertTriangle
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -25,7 +25,7 @@ export const navItems: Array<{
   { href: "/transaction-logs", label: "Transaction Logs", icon: ReceiptText },
   { href: "/route-config", label: "Route Config", icon: Route },
   { href: "/bus-fleet", label: "Bus Fleet Management", icon: BusFront },
-  { href: "/remittances", label: "Remittances", icon: DollarSign },
+  { href: "/remittances", label: "Remittances", icon: PhilippinePeso },
   { href: "/employees", label: "Employees", icon: IdCard },
   { href: "/violations", label: "Violations", icon: AlertTriangle },
   { href: "/admin-tools", label: "Admin Tools", icon: ShieldCheck },

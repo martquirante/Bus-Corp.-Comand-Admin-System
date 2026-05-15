@@ -24,15 +24,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(sessionStorageKey);
-    if (stored) {
-      try {
+    try {
+      const stored = window.localStorage.getItem(sessionStorageKey);
+      if (stored) {
         setSession(JSON.parse(stored) as Session);
-      } catch {
-        window.localStorage.removeItem(sessionStorageKey);
       }
+    } catch {
+      try {
+        window.localStorage.removeItem(sessionStorageKey);
+      } catch {
+        // Storage can be unavailable in restricted browser contexts.
+      }
+    } finally {
+      setIsReady(true);
     }
-    setIsReady(true);
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -42,11 +47,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async login(email: string, password: string) {
         const result = await api.login(email, password);
         setSession(result.data);
-        window.localStorage.setItem(sessionStorageKey, JSON.stringify(result.data));
+        try {
+          window.localStorage.setItem(sessionStorageKey, JSON.stringify(result.data));
+        } catch {
+          // Keep the in-memory session even if browser storage is unavailable.
+        }
       },
       logout() {
         setSession(null);
-        window.localStorage.removeItem(sessionStorageKey);
+        try {
+          window.localStorage.removeItem(sessionStorageKey);
+        } catch {
+          // Ignore storage cleanup failures in restricted browser contexts.
+        }
       }
     }),
     [session, isReady]

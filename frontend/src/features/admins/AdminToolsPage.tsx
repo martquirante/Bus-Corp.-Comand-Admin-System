@@ -1,13 +1,12 @@
 "use client";
 
-import { FormEvent, useCallback, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useState, useRef, useEffect } from "react";
 import type { AdminAccount, EmployeeRecord } from "@pos-bus/shared";
-import { Edit3, KeyRound, Plus, Power, RefreshCcw, ShieldCheck, UserCog, Users, X } from "lucide-react";
+import { Edit3, KeyRound, Plus, Power, RefreshCcw, ShieldCheck, UserCog, X, Search, ChevronDown } from "lucide-react";
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
 import { Portal } from "@/components/ui/Portal";
-import { DataTable } from "@/components/ui/DataTable";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +15,7 @@ type MergedRow = {
   employee: EmployeeRecord | null;
   account: AdminAccount | null;
   displayName: string;
+  displayEmail: string;
   displayRole: string;
   displayStatus: string;
   hasAccount: boolean;
@@ -28,10 +28,19 @@ const roleOptions: AdminAccount["role"][] = ["Admin", "Driver", "Conductor", "In
 const temporaryPassword = () =>
   `POS-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-const emptyCreateForm = () => ({
+type CreateForm = {
+  employeeId?: string;
+  employeeNumber?: string;
+  fullName: string;
+  email: string;
+  role: AdminAccount["role"];
+  password: string;
+};
+
+const emptyCreateForm = (): CreateForm => ({
   fullName: "",
   email: "",
-  role: "Conductor" as AdminAccount["role"],
+  role: "Conductor",
   password: temporaryPassword()
 });
 
@@ -49,7 +58,6 @@ const mergeLists = (employees: EmployeeRecord[], accounts: AdminAccount[]): Merg
   const rows: MergedRow[] = [];
   const usedAccountIds = new Set<string>();
 
-  // For each employee, try to find a matching account
   for (const emp of employees) {
     const matchedAccount =
       accounts.find(
@@ -66,6 +74,7 @@ const mergeLists = (employees: EmployeeRecord[], accounts: AdminAccount[]): Merg
       key: emp.id,
       employee: emp,
       account: matchedAccount,
+      displayEmail: matchedAccount?.email || emp.email || "",
       displayName: emp.fullName || matchedAccount?.fullName || "—",
       displayRole: matchedAccount?.role || toAdminRole(emp.role) || emp.role || "—",
       displayStatus: matchedAccount ? matchedAccount.status : "no-account",
@@ -73,13 +82,13 @@ const mergeLists = (employees: EmployeeRecord[], accounts: AdminAccount[]): Merg
     });
   }
 
-  // Add accounts that have no matching employee
   for (const acct of accounts) {
     if (usedAccountIds.has(acct.id)) continue;
     rows.push({
       key: acct.id,
       employee: null,
       account: acct,
+      displayEmail: acct.email || "",
       displayName: acct.fullName || "—",
       displayRole: acct.role || "—",
       displayStatus: acct.status,
@@ -112,29 +121,41 @@ export function AdminToolsPage() {
   const [accountFilter, setAccountFilter] = useState<AccountFilter>("all");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [query, setQuery] = useState("");
-  const [form, setForm] = useState(emptyCreateForm);
+  const [form, setForm] = useState<CreateForm>(emptyCreateForm());
   const [editing, setEditing] = useState<EditForm | null>(null);
   const [selectedRow, setSelectedRow] = useState<MergedRow | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  const [comboSearch, setComboSearch] = useState("");
+  const [showCombo, setShowCombo] = useState(false);
+  const comboRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (comboRef.current && !comboRef.current.contains(event.target as Node)) {
+        setShowCombo(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const refreshAll = async () => {
     await Promise.all([accounts.refresh(), employees.refresh()]);
   };
 
-  // Merge employees + accounts
   const mergedRows = useMemo(
     () => mergeLists(employees.data || [], accounts.data || []),
     [employees.data, accounts.data]
   );
 
-  // Filtered rows
   const filteredRows = useMemo(() => {
     return mergedRows.filter((row) => {
       const matchQuery =
         !query ||
-        `${row.displayName} ${row.displayRole} ${row.displayStatus} ${row.employee?.employeeNumber || ""} ${row.account?.email || ""}`
+        `${row.displayName} ${row.displayEmail} ${row.displayRole} ${row.displayStatus} ${row.employee?.employeeNumber || ""}`
           .toLowerCase()
           .includes(query.toLowerCase());
 
@@ -153,15 +174,84 @@ export function AdminToolsPage() {
     });
   }, [mergedRows, query, accountFilter, roleFilter]);
 
-  // Create account
+  const comboOptions = useMemo(() => {
+    const q = comboSearch.toLowerCase();
+    return mergedRows
+      .filter((r) => r.employee)
+      .filter((r) => {
+        if (!q) return true;
+        const e = r.employee!;
+        return (
+          e.fullName.toLowerCase().includes(q) ||
+          (e.employeeNumber && e.employeeNumber.toLowerCase().includes(q)) ||
+          (e.email && e.email.toLowerCase().includes(q)) ||
+          e.role.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (a.hasAccount === b.hasAccount) {
+          return a.displayName.localeCompare(b.displayName);
+        }
+        return a.hasAccount ? 1 : -1;
+      });
+  }, [mergedRows, comboSearch]);
+
+  const selectEmployee = (row: MergedRow) => {
+    const emp = row.employee;
+    if (!emp) return;
+
+    setSelectedRow(row);
+    setComboSearch(emp.fullName);
+    setShowCombo(false);
+    setMessage(null);
+    setIsSuccess(false);
+
+    setForm((prev) => ({
+      ...prev,
+      employeeId: emp.id,
+      employeeNumber: emp.employeeNumber || "",
+      fullName: emp.fullName,
+      email: row.account?.email || emp.email || "",
+      role: toAdminRole(emp.role) || "Conductor"
+    }));
+  };
+
+  const selectRow = (row: MergedRow) => {
+    if (row.employee) {
+      selectEmployee(row);
+      return;
+    }
+
+    setSelectedRow(row);
+    setComboSearch("");
+    setForm(emptyCreateForm());
+    setMessage(null);
+    setIsSuccess(false);
+  };
+
   const createAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (!selectedRow?.employee) {
+      setMessage("Please select a valid employee from the list.");
+      setIsSuccess(false);
+      return;
+    }
+
+    if (selectedRow.hasAccount) {
+      setMessage("This employee already has a login account.");
+      setIsSuccess(false);
+      return;
+    }
+
     setMessage(null);
     setIsSuccess(false);
     setIsSaving(true);
 
     try {
       await api.createAdmin({
+        employeeId: form.employeeId,
+        employeeNumber: form.employeeNumber,
         fullName: form.fullName,
         email: form.email,
         role: form.role,
@@ -171,6 +261,7 @@ export function AdminToolsPage() {
       setMessage(`✓ Account created for ${form.fullName}. Temp password: ${form.password}`);
       setIsSuccess(true);
       setForm(emptyCreateForm());
+      setComboSearch("");
       setSelectedRow(null);
       await refreshAll();
     } catch (error) {
@@ -181,7 +272,6 @@ export function AdminToolsPage() {
     }
   };
 
-  // Open edit
   const openEdit = (row: MergedRow) => {
     if (!row.account) return;
     setMessage(null);
@@ -195,7 +285,6 @@ export function AdminToolsPage() {
     });
   };
 
-  // Save edit
   const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editing) return;
@@ -219,7 +308,6 @@ export function AdminToolsPage() {
     }
   };
 
-  // Reset password
   const resetPassword = async (row: MergedRow) => {
     if (!row.account) return;
     const nextPassword = temporaryPassword();
@@ -231,7 +319,6 @@ export function AdminToolsPage() {
     await refreshAll();
   };
 
-  // Toggle status
   const toggleStatus = async (row: MergedRow) => {
     if (!row.account) return;
     const status = row.account.status === "active" ? "inactive" : "active";
@@ -239,27 +326,17 @@ export function AdminToolsPage() {
     await refreshAll();
   };
 
-  // Select row to prefill create form
-  const selectRow = (row: MergedRow) => {
-    setSelectedRow(row);
-    if (!row.hasAccount) {
-      // Prefill create form from employee data
-      setForm({
-        fullName: row.employee?.fullName || "",
-        email: row.employee?.email || "",
-        role: toAdminRole(row.employee?.role) || "Conductor",
-        password: temporaryPassword()
-      });
-      setMessage(null);
-      setIsSuccess(false);
-    }
-  };
+  const hasExistingAccount = Boolean(selectedRow?.employee && selectedRow.hasAccount);
 
   return (
-    <AppShell title="Admin Tools" kicker="Login accounts, access control, and workforce sync">
-      <section className="admin-grid account-admin-grid">
-        {/* Left: table */}
-        <section className="command-card">
+    <AppShell
+      title="Admin Tools"
+      kicker="Login accounts, access control, and workforce sync"
+      mainClassName="admin-tools-shell"
+    >
+      <section className="admin-tools-grid">
+        {/* Left: list */}
+        <section className="command-card admin-account-panel">
           <div className="section-heading compact">
             <div>
               <span>{filteredRows.length} of {mergedRows.length} records</span>
@@ -268,145 +345,241 @@ export function AdminToolsPage() {
             <ShieldCheck size={20} />
           </div>
 
-          {/* Search */}
-          <div className="filter-bar single" style={{ marginBottom: 10 }}>
-            <label>
-              Search
+          <div className="admin-account-toolbar">
+            <div className="admin-tools-search">
+              <Search size={16} />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Name, email, role, status…"
               />
-            </label>
+            </div>
+
+            <div className="admin-filter-controls">
+              <label>
+                Account status
+                <select
+                  value={accountFilter}
+                  onChange={(e) => setAccountFilter(e.target.value as AccountFilter)}
+                >
+                  <option value="all">All accounts</option>
+                  <option value="active">Active</option>
+                  <option value="no-account">No account</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+
+              <label>
+                Role
+                <select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value as RoleFilter)}
+                >
+                  <option value="all">All roles</option>
+                  <option value="Driver">Driver</option>
+                  <option value="Conductor">Conductor</option>
+                  <option value="Admin">Admin</option>
+                  <option value="Inspector">Inspector</option>
+                </select>
+              </label>
+            </div>
           </div>
 
-          {/* Account status filter chips */}
-          <div className="admin-chip-row">
-            {(["all", "active", "no-account", "inactive"] as AccountFilter[]).map((f) => (
-              <button
-                key={f}
-                type="button"
-                className={`emp-chip ${accountFilter === f ? "active" : ""}`}
-                onClick={() => setAccountFilter(f)}
-              >
-                {f === "no-account" ? "No Account" : f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-            <span className="admin-chip-sep" />
-            {(["all", "Driver", "Conductor", "Admin", "Inspector"] as RoleFilter[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={`emp-chip ${roleFilter === r ? "active" : ""}`}
-                onClick={() => setRoleFilter(r)}
-              >
-                {r === "all" ? "All Roles" : r}
-              </button>
-            ))}
-          </div>
+          {/* Custom Account List */}
+          <div className="admin-account-list">
+            {filteredRows.length === 0 ? (
+              <div className="fleet-empty">
+                <p>No workforce accounts found.</p>
+              </div>
+            ) : (
+              filteredRows.map((row) => (
+                <article
+                  key={row.key}
+                  className={`admin-account-row ${selectedRow?.key === row.key ? "selected" : ""}`}
+                  onClick={() => selectRow(row)}
+                >
+                  <div className="admin-account-card-main">
+                    <div className="admin-account-person">
+                      <strong>{row.displayName}</strong>
+                      <span>{row.employee?.employeeNumber || row.account?.employeeNumber || "No employee ID"}</span>
+                      {!row.hasAccount ? <small>No login account yet</small> : null}
+                    </div>
 
-          <DataTable
-            rows={filteredRows}
-            getRowKey={(row) => row.key}
-            onRowClick={selectRow}
-            selectedRowKey={selectedRow?.key}
-            columns={[
-              {
-                header: "Name",
-                cell: (row) => (
-                  <span className="admin-name-cell">
-                    <strong>{row.displayName}</strong>
-                    {row.employee?.employeeNumber ? (
-                      <span className="admin-emp-num">{row.employee.employeeNumber}</span>
-                    ) : null}
-                  </span>
-                )
-              },
-              {
-                header: "Email",
-                cell: (row) => row.account?.email || row.employee?.email || <em>—</em>
-              },
-              { header: "Role", cell: (row) => row.displayRole },
-              {
-                header: "Account",
-                cell: (row) =>
-                  row.hasAccount ? (
-                    <span className={`status-pill status-${row.displayStatus}`}>{row.displayStatus}</span>
-                  ) : (
-                    <span className="status-pill status-no-account">No account</span>
-                  )
-              },
-              {
-                header: "Actions",
-                cell: (row) => (
-                  <div className="table-action-row">
-                    {row.hasAccount ? (
-                      <>
-                        <button
-                          type="button"
-                          className="soft-button table-action"
-                          onClick={(e) => { e.stopPropagation(); openEdit(row); }}
-                        >
-                          <Edit3 size={14} /> Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="soft-button table-action"
-                          onClick={(e) => { e.stopPropagation(); void resetPassword(row); }}
-                        >
-                          <KeyRound size={14} /> Reset
-                        </button>
-                        <button
-                          type="button"
-                          className="soft-button table-action"
-                          onClick={(e) => { e.stopPropagation(); void toggleStatus(row); }}
-                        >
-                          <Power size={14} />
-                          {row.account?.status === "active" ? "Deactivate" : "Activate"}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="primary-action table-action"
-                        onClick={(e) => { e.stopPropagation(); selectRow(row); }}
-                      >
-                        <Plus size={14} /> Create access
-                      </button>
-                    )}
+                    <div className="admin-account-email">
+                      <span>Login Email</span>
+                      <strong>{row.displayEmail || "No email set"}</strong>
+                    </div>
+
+                    <div className="admin-account-badges">
+                      <span className="admin-role-badge">{row.displayRole}</span>
+                      {row.hasAccount ? (
+                        <span className={`status-pill status-${row.displayStatus}`}>
+                          {row.displayStatus}
+                        </span>
+                      ) : (
+                        <span className="status-pill status-no-account">No Account</span>
+                      )}
+                    </div>
                   </div>
-                )
-              }
-            ]}
-          />
+
+                  <div className="admin-account-actions">
+                    <div className="admin-account-action-set">
+                      {row.hasAccount ? (
+                        <>
+                          <button
+                            type="button"
+                            className="soft-button table-action"
+                            onClick={(e) => { e.stopPropagation(); openEdit(row); }}
+                          >
+                            <Edit3 size={14} /> Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="soft-button table-action"
+                            onClick={(e) => { e.stopPropagation(); void resetPassword(row); }}
+                          >
+                            <KeyRound size={14} /> Reset
+                          </button>
+                          <button
+                            type="button"
+                            className="soft-button table-action"
+                            onClick={(e) => { e.stopPropagation(); void toggleStatus(row); }}
+                          >
+                            <Power size={14} />
+                            {row.account?.status === "active" ? "Deactivate" : "Activate"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="primary-action table-action"
+                          onClick={(e) => { e.stopPropagation(); selectEmployee(row); }}
+                        >
+                          <Plus size={14} /> Create access
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
         </section>
 
         {/* Right: create access form */}
-        <section className="command-card">
+        <section className="command-card admin-access-panel">
           <div className="section-heading compact">
             <div>
-              <span>{selectedRow && !selectedRow.hasAccount ? `Prefilled for ${selectedRow.displayName}` : "New account"}</span>
+              <span>New account setup</span>
               <h2>Create access</h2>
             </div>
             <UserCog size={20} />
           </div>
 
-          {selectedRow && !selectedRow.hasAccount ? (
-            <div className="admin-prefill-notice">
-              <Users size={14} />
-              <span>Prefilled from employee record. Review and confirm before creating.</span>
-            </div>
-          ) : null}
-
           <form className="stacked-form" onSubmit={createAccount}>
-            <label>
-              Full name
-              <input
-                value={form.fullName}
-                onChange={(e) => setForm((c) => ({ ...c, fullName: e.target.value }))}
-                required
-              />
-            </label>
+            {/* Combobox for Employee selection */}
+            <div className="admin-employee-combobox" ref={comboRef}>
+              <label>
+                Select Employee *
+                <div className="admin-employee-picker" onClick={() => setShowCombo(true)}>
+                  <Search size={16} />
+                  <input
+                    value={comboSearch}
+                    onChange={(e) => {
+                      setComboSearch(e.target.value);
+                      setShowCombo(true);
+                      if (e.target.value === "" && selectedRow) {
+                        setSelectedRow(null);
+                        setForm(emptyCreateForm());
+                      }
+                    }}
+                    onFocus={() => setShowCombo(true)}
+                    placeholder="Search by name, ID, email, role..."
+                  />
+                  {comboSearch && (
+                    <button
+                      type="button"
+                      className="admin-picker-clear"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setComboSearch("");
+                        setSelectedRow(null);
+                        setForm(emptyCreateForm());
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                  {!comboSearch && <ChevronDown size={16} />}
+                </div>
+              </label>
+
+              {showCombo && (
+                <div className="admin-employee-options">
+                  {comboOptions.length > 0 ? (
+                    comboOptions.map((row) => (
+                      <button
+                        key={row.key}
+                        type="button"
+                        className="admin-employee-option"
+                        onClick={() => selectEmployee(row)}
+                      >
+                        <div style={{ flex: 1 }}>
+                          <strong>{row.displayName}</strong>
+                          <small>
+                            ID: {row.employee?.employeeNumber || "—"} &bull; {row.displayRole}
+                          </small>
+                        </div>
+                        <em>
+                          {row.hasAccount ? row.displayStatus : "No Account"}
+                        </em>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="admin-employee-empty">No employees found.</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {selectedRow?.employee ? (
+              <div className="admin-selected-employee">
+                <div>
+                  <span>Name</span>
+                  <strong>{selectedRow.displayName}</strong>
+                </div>
+                <div>
+                  <span>ID Number</span>
+                  <strong>{selectedRow.employee.employeeNumber || "N/A"}</strong>
+                </div>
+                <div>
+                  <span>Role</span>
+                  <strong>{selectedRow.displayRole}</strong>
+                </div>
+                <div>
+                  <span>Email</span>
+                  <strong>{selectedRow.employee.email || "—"}</strong>
+                </div>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <span>Account Status</span>
+                  <strong className={selectedRow.hasAccount ? "" : "form-success"}>
+                    {selectedRow.hasAccount ? selectedRow.displayStatus : "No Account"}
+                  </strong>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="form-readonly-header">
+              <label>
+                Full name
+                <input value={form.fullName} readOnly className="locked-input" placeholder="Auto-filled from employee" required />
+              </label>
+              <label>
+                Employee Number
+                <input value={form.employeeNumber || ""} readOnly className="locked-input" placeholder="Auto-filled" />
+              </label>
+            </div>
+
             <label>
               Email
               <input
@@ -414,6 +587,9 @@ export function AdminToolsPage() {
                 onChange={(e) => setForm((c) => ({ ...c, email: e.target.value }))}
                 type="email"
                 required
+                readOnly={!!selectedRow?.employee?.email}
+                className={selectedRow?.employee?.email ? "locked-input" : ""}
+                placeholder={selectedRow?.employee?.email ? "" : "Enter email for account"}
               />
             </label>
             <label>
@@ -448,12 +624,29 @@ export function AdminToolsPage() {
               </div>
             </label>
 
+            {hasExistingAccount && (
+              <p className="form-error penalty-warning" style={{ marginTop: 0 }}>
+                This employee already has a login account.
+              </p>
+            )}
+
             {message ? (
-              <p className={`form-error account-message ${isSuccess ? "form-success" : ""}`}>{message}</p>
+              <p className={`form-error account-message ${isSuccess ? "form-success rem-exact" : ""}`} style={{ color: isSuccess ? "var(--green)" : "var(--red)" }}>
+                {message}
+              </p>
             ) : null}
 
-            <button className="primary-action" type="submit" disabled={isSaving}>
-              <Plus size={17} /> {isSaving ? "Creating…" : "Create account"}
+            <button
+              className="primary-action"
+              type="submit"
+              disabled={isSaving || !selectedRow?.employee || hasExistingAccount}
+            >
+              <Plus size={17} />
+              {isSaving
+                ? "Creating…"
+                : selectedRow?.employee
+                  ? `Create access for ${selectedRow.employee.fullName.split(' ')[0]}`
+                  : "Create account"}
             </button>
           </form>
         </section>
