@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import Image from "next/image";
 import {
   Banknote,
@@ -37,6 +37,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ChartCard } from "@/components/charts/ChartCard";
 import { CommandChartTooltip } from "@/components/charts/CommandChartTooltip";
 import { AlertPanel } from "@/components/dashboard/AlertPanel";
+import { MessengerDrawer } from "@/components/chat/MessengerDrawer";
 import { DataTable } from "@/components/ui/DataTable";
 import { formatNumber, formatPeso, relativeMinutes } from "@/utils/format";
 
@@ -63,6 +64,7 @@ export function DashboardPage() {
   const fleet = useLiveApiResource(loadFleet, { intervalMs: 5000 });
   const reports = useLiveApiResource(loadReports, { intervalMs: 9000 });
   const transactions = useLiveApiResource(loadTransactions, { intervalMs: 5000 });
+  const [isMessengerOpen, setIsMessengerOpen] = useState(false);
 
   const dashboardSummary = summary.data;
   const dashboardStats = dashboardSummary?.stats || stats.data || emptyStats;
@@ -248,7 +250,13 @@ export function DashboardPage() {
           />
         </section>
 
-        <section className="command-card">
+        <section 
+          className="command-card" 
+          onClick={() => setIsMessengerOpen(true)}
+          style={{ cursor: "pointer", transition: "transform 0.2s" }}
+          onMouseOver={(e) => (e.currentTarget.style.transform = "scale(1.02)")}
+          onMouseOut={(e) => (e.currentTarget.style.transform = "scale(1)")}
+        >
           <div className="section-heading compact">
             <div>
               <span>Messages</span>
@@ -266,7 +274,7 @@ export function DashboardPage() {
                 </article>
               ))
             ) : (
-              <p className="empty-note">No messages in the legacy path yet.</p>
+              <p className="empty-note">Click to open Messenger and start a conversation.</p>
             )}
           </div>
         </section>
@@ -294,6 +302,8 @@ export function DashboardPage() {
           </div>
         </section>
       </section>
+
+      <MessengerDrawer isOpen={isMessengerOpen} onClose={() => setIsMessengerOpen(false)} />
     </AppShell>
   );
 }

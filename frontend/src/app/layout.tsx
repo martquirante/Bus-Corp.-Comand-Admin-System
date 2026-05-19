@@ -6,7 +6,12 @@ import "@/styles/route-command-center.css";
 
 export const metadata: Metadata = {
   title: "POS Bus Ticketing | Command Center",
-  description: "Web admin command center for the POS Bus Ticketing Simulation."
+  description: "Web admin command center for the POS Bus Ticketing Simulation.",
+  icons: {
+    icon: "/assets/logos/pos-bus-logo.png",
+    shortcut: "/assets/logos/pos-bus-logo.png",
+    apple: "/assets/logos/pos-bus-logo.png"
+  }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

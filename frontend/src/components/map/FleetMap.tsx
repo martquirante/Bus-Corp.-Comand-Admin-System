@@ -240,6 +240,12 @@ export function FleetMap({
       setMapError("Device location is not supported in this browser.");
       return;
     }
+    
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      setAdminLocationStatus("unsupported");
+      setMapError("Location requires HTTPS or localhost. Network IPs (like 192.168.x.x) over HTTP block location access.");
+      return;
+    }
 
     setAdminLocationStatus("locating");
 
@@ -255,9 +261,14 @@ export function FleetMap({
       },
       (error) => {
         setAdminLocationStatus(error.code === error.PERMISSION_DENIED ? "denied" : "idle");
+        
+        const isNetworkIp = typeof window !== "undefined" && window.isSecureContext === false;
+        
         setMapError(
           error.code === error.PERMISSION_DENIED
-            ? "Location permission was denied. Use the Admin location button to try again."
+            ? isNetworkIp 
+                ? "Location permission blocked by browser. Network IP access requires HTTPS."
+                : "Location permission was denied. Use the Admin location button to try again."
             : "Could not read device location right now."
         );
       },

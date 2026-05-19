@@ -13,7 +13,8 @@ export function ThemeToggle() {
       className="theme-toggle"
       onClick={toggleTheme}
       aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      title={isDark ? "Light mode" : "Dark mode"}
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      data-theme-mode={theme}
     >
       <span className="theme-toggle-track">
         <span className="theme-toggle-thumb" data-active={isDark}>

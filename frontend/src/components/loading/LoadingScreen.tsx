@@ -34,6 +34,7 @@ export function LoadingScreen() {
           height={80}
           alt="Loading bus"
           className="loading-bus-image"
+          style={{ height: "auto" }}
           priority
         />
       </div>
