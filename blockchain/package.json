@@ -1,0 +1,15 @@
+{
+  "name": "pos-bus-blockchain",
+  "version": "1.0.0",
+  "description": "Blockchain Audit Ledger for POS BUS Simulation",
+  "main": "index.js",
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "test": "npx hardhat test",
+    "deploy": "npx hardhat run scripts/deploy.ts"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.19.4"
+  }
+}

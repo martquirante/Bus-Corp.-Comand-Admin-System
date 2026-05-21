@@ -9,7 +9,8 @@ import {
   ShieldCheck,
   UsersRound,
   PhilippinePeso,
-  AlertTriangle
+  AlertTriangle,
+  Fingerprint
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -28,6 +29,7 @@ export const navItems: Array<{
   { href: "/remittances", label: "Remittances", icon: PhilippinePeso },
   { href: "/employees", label: "Employees", icon: IdCard },
   { href: "/violations", label: "Violations", icon: AlertTriangle },
+  { href: "/blockchain-security", label: "Security Ledger", icon: Fingerprint },
   { href: "/admin-tools", label: "Admin Tools", icon: ShieldCheck },
   { href: "/dashboard", label: "Fleet Desk", icon: UsersRound, secondary: true }
 ] as const;

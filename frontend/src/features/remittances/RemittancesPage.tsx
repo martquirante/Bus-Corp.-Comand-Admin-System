@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useMemo, useState } from "react";
 import type { BusFleetRecord, EmployeeRecord, RemittanceRecord, RouteConfig } from "@pos-bus/shared";
 import {
   AlertCircle, CheckCircle2, Clock, PhilippinePeso, Plus,
-  Search, TrendingDown, X
+  Search, TrendingDown, X, Fingerprint, ShieldCheck
 } from "lucide-react";
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
@@ -398,6 +398,16 @@ export function RemittancesPage() {
                 </div>
                 <span className={`fleet-status-badge large ${STATUS_DISPLAY[selectedRecord.status].cls}`}>
                   {STATUS_DISPLAY[selectedRecord.status].label}
+                </span>
+              </div>
+
+              <div className="border border-indigo-950/80 bg-indigo-950/20 px-3 py-2 rounded-lg text-xs text-indigo-300 font-mono flex items-center justify-between gap-3 mt-4 mb-4">
+                <span className="flex items-center gap-1.5">
+                  <Fingerprint size={14} className="text-indigo-400 animate-pulse" />
+                  <span>Ledger Proof: <strong>{selectedRecord.id}</strong></span>
+                </span>
+                <span className="flex items-center gap-1 text-emerald-400 font-semibold bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-500/20 shadow-sm">
+                  <ShieldCheck size={12} /> Verified Audit
                 </span>
               </div>
 

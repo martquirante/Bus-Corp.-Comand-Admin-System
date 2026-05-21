@@ -3,6 +3,7 @@ import type { AdminAccount, BusFleetRecord, ChatConversation, ChatMessage, Emplo
 import { realtimeDbService } from "./realtimeDb.service.js";
 import { firebaseService } from "./firebase.service.js";
 import { supabaseService } from "./supabase.service.js";
+import { blockchainAuditService } from "./blockchainAudit.service.js";
 
 type AnyRecord = Record<string, any>;
 type CollectionRecord<T> = T & { id: string };
@@ -272,6 +273,7 @@ export const remittanceService = {
     const row = await supabaseService.createRemittance(payload);
     if (row) {
       await setRecord<RemittanceRecord>(firebasePaths.remittances, row.id, row);
+      void blockchainAuditService.createAuditRecord("remittance", row.id, row, actor, "Admin");
       return row;
     }
     return createRecord<Partial<RemittanceRecord>>(firebasePaths.remittances, payload);
@@ -280,7 +282,10 @@ export const remittanceService = {
   async patch(id: string, payload: Partial<RemittanceRecord>, actor: string) {
     void firebaseService.auditAction("remittance_patch", actor, { id });
     const row = await supabaseService.patchRemittance(id, payload);
-    if (row) return row;
+    if (row) {
+      void blockchainAuditService.createAuditRecord("remittance", row.id, row, actor, "Admin");
+      return row;
+    }
     return patchRecord<RemittanceRecord>(firebasePaths.remittances, id, payload);
   }
 };
@@ -303,6 +308,7 @@ export const violationService = {
     const row = await supabaseService.createViolation(payload);
     if (row) {
       await setRecord<EmployeeViolationRecord>(firebasePaths.employeeViolations, row.id, row);
+      void blockchainAuditService.createAuditRecord("violation", row.id, row, actor, "Admin");
       return row;
     }
     return createRecord<Partial<EmployeeViolationRecord>>(firebasePaths.employeeViolations, payload);
@@ -311,7 +317,10 @@ export const violationService = {
   async patch(id: string, payload: Partial<EmployeeViolationRecord>, actor: string) {
     void firebaseService.auditAction("violation_patch", actor, { id });
     const row = await supabaseService.patchViolation(id, payload);
-    if (row) return row;
+    if (row) {
+      void blockchainAuditService.createAuditRecord("violation", row.id, row, actor, "Admin");
+      return row;
+    }
     return patchRecord<EmployeeViolationRecord>(firebasePaths.employeeViolations, id, payload);
   }
 };

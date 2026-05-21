@@ -3,7 +3,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { env } from "./config/env.js";
-import { apiRateLimit } from "./middleware/rateLimit.middleware.js";
+import { apiRateLimit, healthRateLimit } from "./middleware/rateLimit.middleware.js";
 import { errorMiddleware, notFoundMiddleware } from "./middleware/error.middleware.js";
 import { adminRoutes } from "./routes/admin.routes.js";
 import { authRoutes } from "./routes/auth.routes.js";
@@ -28,6 +28,7 @@ import { storageRoutes } from "./routes/storage.routes.js";
 import { requestLogger } from "./middleware/requestLogger.middleware.js";
 import { remittancesRoutes } from "./routes/remittances.routes.js";
 import { employeeViolationsRoutes } from "./routes/employeeViolations.routes.js";
+import blockchainRoutes from "./routes/blockchain.routes.js";
 
 export const app = express();
 const allowedOrigins = env.ADMIN_WEB_ORIGIN.split(",")
@@ -56,7 +57,7 @@ app.get("/", (_req, res) => {
   });
 });
 
-app.use("/api/health", healthRoutes);
+app.use("/api/health", healthRateLimit, healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/fleet", fleetRoutes);
@@ -78,6 +79,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/storage", storageRoutes);
 app.use("/api/remittances", remittancesRoutes);
 app.use("/api/employee-violations", employeeViolationsRoutes);
+app.use("/api/blockchain", blockchainRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);

@@ -6,3 +6,4 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 export const reportsRoutes = Router();
 
 reportsRoutes.get("/revenue", requireAuth, asyncHandler(reportsController.getRevenue));
+reportsRoutes.post("/audit", requireAuth, asyncHandler(reportsController.auditReport));

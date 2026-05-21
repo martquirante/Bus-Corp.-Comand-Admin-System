@@ -175,6 +175,14 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
   }
 }
 
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelope<T>> {
   const token = getToken();
 
@@ -191,7 +199,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<ApiEnvelop
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(payload?.error?.message || payload?.message || "API request failed.");
+    throw new ApiError(response.status, payload?.error?.message || payload?.message || "API request failed.");
   }
 
   return payload as ApiEnvelope<T>;
@@ -213,7 +221,7 @@ async function apiUpload<T>(path: string, file: Blob, contentType?: string): Pro
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(payload?.error?.message || payload?.message || "API upload failed.");
+    throw new ApiError(response.status, payload?.error?.message || payload?.message || "API upload failed.");
   }
 
   return payload as ApiEnvelope<T>;
@@ -697,6 +705,95 @@ export const api = {
   async patchViolationStatus(id: string, payload: Pick<Partial<EmployeeViolationRecord>, "status" | "resolutionNotes">) {
     return apiFetch<EmployeeViolationRecord>(`/employee-violations/${encodeURIComponent(id)}/status`, {
       method: "PATCH",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  // ─── Blockchain & Security ─────────────────────────────────────────────
+
+  async blockchainStatus() {
+    return apiFetch<{
+      enabled: boolean;
+      network: string;
+      contractAddress: string;
+      rpcUrl: string;
+      stats: {
+        total: number;
+        verified: number;
+        pending: number;
+        failed: number;
+        local_only: number;
+        mismatch: number;
+      };
+    }>("/blockchain/status");
+  },
+
+  async blockchainLogs(filters?: { recordType?: string; status?: string; limit?: number }) {
+    const query = new URLSearchParams();
+    if (filters?.recordType) query.set("recordType", filters.recordType);
+    if (filters?.status) query.set("status", filters.status);
+    if (filters?.limit) query.set("limit", String(filters.limit));
+    return apiFetch<any[]>(`/blockchain/audits${query.size ? `?${query}` : ""}`);
+  },
+
+  async blockchainSecurityLogs(filters?: { limit?: number }) {
+    const query = new URLSearchParams();
+    if (filters?.limit) query.set("limit", String(filters.limit));
+    return apiFetch<any[]>(`/blockchain/security-logs${query.size ? `?${query}` : ""}`);
+  },
+
+  async getBlockchainRecord(recordType: string, recordId: string) {
+    return apiFetch<any>(`/blockchain/audits/${encodeURIComponent(recordType)}/${encodeURIComponent(recordId)}`);
+  },
+
+  async verifyBlockchainRecord(recordType: string, recordId: string) {
+    return apiFetch<{
+      tampered: boolean;
+      computedHash: string;
+      savedHash: string;
+      status: string;
+      localRecordHash: string;
+      blockchainHash?: string;
+      txHash?: string;
+      mismatch: boolean;
+    }>(`/blockchain/audits/${encodeURIComponent(recordType)}/${encodeURIComponent(recordId)}/verify`, {
+      method: "POST"
+    });
+  },
+
+  async anchorBlockchainRecord(recordType: string, recordId: string) {
+    return apiFetch<{
+      txHash: string;
+      status: string;
+    }>(`/blockchain/audits/${encodeURIComponent(recordType)}/${encodeURIComponent(recordId)}/anchor`, {
+      method: "POST"
+    });
+  },
+
+  async retryPendingAudits() {
+    return apiFetch<{
+      attemptedCount: number;
+      successCount: number;
+      failedCount: number;
+      results: Array<{ id: string; success: boolean; txHash?: string; error?: string }>;
+    }>("/blockchain/retry-pending", {
+      method: "POST"
+    });
+  },
+
+  async verifyAllPendingAudits() {
+    return apiFetch<{
+      pendingCount: number;
+      verified: number;
+      mismatches: number;
+    }>("/blockchain/verify-all-pending", {
+      method: "POST"
+    });
+  },
+
+  async auditReportExport(payload: { reportType: string; fileHash: string; dataSummary: any }) {
+    return apiFetch<any>("/reports/audit", {
+      method: "POST",
       body: JSON.stringify(payload)
     });
   }

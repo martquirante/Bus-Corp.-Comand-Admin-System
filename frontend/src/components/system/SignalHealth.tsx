@@ -2,26 +2,27 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, RadioTower, RefreshCw, Server } from "lucide-react";
-import { api, apiBaseUrl, getSessionToken } from "@/services/api";
+import { api, apiBaseUrl, getSessionToken, ApiError } from "@/services/api";
 import { formatDateTime } from "@/utils/format";
 
-type SignalState = "checking" | "connected" | "demo" | "offline";
+type SignalState = "checking" | "connected" | "demo" | "offline" | "limited";
 
 type HealthSnapshot = {
   service: string;
   firebase: "connected" | "rtdb-rest" | "not-configured";
-  supabase: "connected" | "not-configured" | "error";
+  supabase: "connected" | "not-configured" | "error" | "needs_backend_env";
   supabaseMode: "service-role" | "postgres" | "not-configured";
   auth: "dev-bypass" | "protected";
   uptime: number;
   generatedAt: string;
-  source: "firebase" | "rtdb-rest" | "demo";
+  source: "firebase" | "rtdb-rest" | "demo" | "supabase";
 };
 
 const labelForState = (state: SignalState) => {
   if (state === "connected") return "Live Firebase connected";
   if (state === "demo") return "API online, RTDB REST active";
   if (state === "offline") return "API offline";
+  if (state === "limited") return "Health check rate-limited";
   return "Checking signal";
 };
 
@@ -40,11 +41,23 @@ export function SignalHealth() {
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastCheckedRef = useRef(0);
+  const isCheckingRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    const now = Date.now();
+    // Throttle manual or StrictMode double-triggers within 1.5 seconds
+    if (isCheckingRef.current || now - lastCheckedRef.current < 1500) {
+      return;
+    }
+
+    isCheckingRef.current = true;
+    lastCheckedRef.current = now;
     setError(null);
-    setState((current) => (current === "offline" ? "checking" : current));
+    setState((current) => (current === "offline" || current === "limited" ? "checking" : current));
 
     try {
       const result = await api.health();
@@ -53,7 +66,7 @@ export function SignalHealth() {
       setHealth({
         service: result.data.service,
         firebase: result.data.firebase,
-        supabase: result.data.supabase,
+        supabase: result.data.supabase as any,
         supabaseMode: result.data.supabaseMode,
         auth: result.data.auth,
         uptime: result.data.uptime,
@@ -61,10 +74,24 @@ export function SignalHealth() {
         source: result.source
       });
       setState(nextState);
-    } catch (err) {
-      setState("offline");
+    } catch (err: any) {
       setHealth(null);
-      setError(err instanceof Error ? err.message : "Backend health check failed.");
+      
+      // Explicitly check for status 429 Rate Limit error
+      if (err instanceof ApiError && err.status === 429) {
+        setState("limited");
+        setError("Health check is temporarily rate-limited. Please wait a few seconds.");
+        setCooldown(10); // Start 10 seconds retry cooldown
+      } else if (err.message && (err.message.includes("429") || err.message.toLowerCase().includes("rate limit") || err.message.toLowerCase().includes("too many requests"))) {
+        setState("limited");
+        setError("Health check is temporarily rate-limited. Please wait a few seconds.");
+        setCooldown(10);
+      } else {
+        setState("offline");
+        setError(err instanceof Error ? err.message : "Backend health check failed.");
+      }
+    } finally {
+      isCheckingRef.current = false;
     }
   }, []);
 
@@ -73,6 +100,14 @@ export function SignalHealth() {
     const timer = window.setInterval(refresh, 30000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setInterval(() => {
+      setCooldown((c) => c - 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -140,6 +175,8 @@ export function SignalHealth() {
               <Loader2 size={18} className="spin-icon" />
             ) : state === "offline" ? (
               <AlertTriangle size={18} />
+            ) : state === "limited" ? (
+              <AlertTriangle size={18} className="text-amber-500" />
             ) : (
               <CheckCircle2 size={18} />
             )}
@@ -149,7 +186,7 @@ export function SignalHealth() {
             <div>
               <Server size={15} />
               <span>API</span>
-              <strong>{state === "offline" ? "Unavailable" : "Online"}</strong>
+              <strong>{state === "offline" ? "Unavailable" : state === "limited" ? "Rate Limited" : "Available"}</strong>
             </div>
             <div>
               <RadioTower size={15} />
@@ -173,7 +210,9 @@ export function SignalHealth() {
                   ? `Ready (${health.supabaseMode})`
                   : health?.supabase === "error"
                     ? "Config error"
-                    : "Needs backend env"}
+                    : health?.supabase === "needs_backend_env"
+                      ? "Needs backend env"
+                      : "Needs backend env"}
               </strong>
             </div>
             <div>
@@ -198,8 +237,18 @@ export function SignalHealth() {
           {syncMessage ? <p className="signal-sync-message">{syncMessage}</p> : null}
 
           <div className="signal-actions">
-            <button type="button" className="soft-button compact-button" onClick={refresh}>
-              <RefreshCw size={14} /> Check again
+            <button 
+              type="button" 
+              className="soft-button compact-button" 
+              onClick={refresh}
+              disabled={state === "checking" || cooldown > 0}
+            >
+              {state === "checking" ? (
+                <Loader2 size={14} className="spin-icon" />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              {cooldown > 0 ? `Wait ${cooldown}s` : "Check again"}
             </button>
             <button type="button" className="soft-button compact-button" onClick={syncToSql} disabled={isSyncing}>
               {isSyncing ? <Loader2 size={14} className="spin-icon" /> : <Server size={14} />}

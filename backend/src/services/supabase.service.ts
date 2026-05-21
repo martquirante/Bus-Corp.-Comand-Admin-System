@@ -13,6 +13,7 @@ import type {
 } from "@pos-bus/shared";
 import { supabaseAdmin, supabaseMode, supabasePool } from "../config/supabase.js";
 import { AppError } from "../utils/appError.js";
+import { blockchainAuditService } from "./blockchainAudit.service.js";
 
 type AnyRecord = Record<string, any>;
 type TableName =
@@ -1222,6 +1223,14 @@ export const supabaseService = {
       const timestamp = toIsoDate(tx.time);
       const ticketId = await upsertTicket(tx, ticketNo, tripIds.get(tripNo) || null, timestamp);
       await upsertPayment(tx, ticketId, ticketNo, timestamp);
+
+      // Create blockchain audit log entry for the ticket
+      try {
+        await blockchainAuditService.createAuditRecord("ticket", ticketId || ticketNo, tx, "device", "Conductor");
+      } catch (err: any) {
+        console.warn(`[blockchain-audit] Failed to create audit for synced ticket ${ticketNo}:`, err.message);
+      }
+
       ticketCount += 1;
       paymentCount += 1;
     }

@@ -613,7 +613,7 @@ export interface DashboardSummary {
 
 export interface ApiEnvelope<T> {
   data: T;
-  source: "firebase" | "rtdb-rest" | "demo";
+  source: "firebase" | "rtdb-rest" | "demo" | "supabase";
   generatedAt: string;
 }
 
@@ -624,3 +624,53 @@ export interface ApiErrorEnvelope {
     details?: unknown;
   };
 }
+
+export type BlockchainRecordType =
+  | "ticket"
+  | "qr_ticket"
+  | "remittance"
+  | "violation"
+  | "maintenance"
+  | "fuel_log"
+  | "route_change"
+  | "admin_action"
+  | "report_export"
+  | "file_upload";
+
+export type BlockchainStatus =
+  | "pending"
+  | "verified"
+  | "failed"
+  | "skipped"
+  | "local_only"
+  | "mismatch";
+
+export interface BlockchainAuditRecord {
+  id: string;
+  recordType: BlockchainRecordType;
+  recordId: string;
+  recordHash: string;
+  previousHash?: string;
+  blockchainTxHash?: string;
+  blockchainNetwork?: string;
+  blockchainStatus: BlockchainStatus;
+  createdById?: string;
+  createdByRole?: string;
+  metadata?: Record<string, any>;
+  createdAt?: string;
+  verifiedAt?: string;
+}
+
+export interface SystemAuditLog {
+  id: string;
+  actorId?: string;
+  actorRole?: string;
+  action: string;
+  targetType?: string;
+  targetId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  metadata?: Record<string, any>;
+  createdAt?: string;
+}
+

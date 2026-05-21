@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
+import crypto from "crypto";
 import { storageService, type EmployeeUploadKind } from "../services/storage.service.js";
+import { blockchainAuditService } from "../services/blockchainAudit.service.js";
 import { envelope } from "../utils/envelope.js";
 
 const actor = (req: Request) => req.user?.email || req.user?.fullName || "admin";
@@ -30,36 +32,117 @@ export const storageController = {
       return;
     }
 
+    const buffer = requestBodyBuffer(req.body);
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
+
     const assets = await storageService.uploadEmployeeAsset(
       req.params.employeeId,
       kind,
-      requestBodyBuffer(req.body),
+      buffer,
       req.header("content-type") || undefined,
       actor(req)
     );
+
+    // Anchor file audit proof
+    try {
+      const fileId = `file-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      await blockchainAuditService.createAuditRecord(
+        "file_upload",
+        fileId,
+        {
+          fileName: `${kind}-${req.params.employeeId}`,
+          fileType: req.header("content-type") || "image/png",
+          fileSize: buffer.length,
+          uploadedBy: actor(req),
+          relatedRecordType: "employee",
+          relatedRecordId: req.params.employeeId,
+          fileHash,
+          uploadedAt: new Date().toISOString()
+        },
+        req.user?.email,
+        req.user?.role
+      );
+    } catch (err: any) {
+      console.warn("[storage-audit] File upload audit skipped.", err.message);
+    }
+
     res.status(201).json(envelope(assets, "firebase"));
   },
 
   async uploadBusPhoto(req: Request, res: Response) {
     const { busId } = req.params;
+    const buffer = requestBodyBuffer(req.body);
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
+
     const result = await storageService.uploadBusPhoto(
       busId,
-      requestBodyBuffer(req.body),
+      buffer,
       req.header("content-type") || undefined,
       actor(req)
     );
+
+    // Anchor file audit proof
+    try {
+      const fileId = `file-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      await blockchainAuditService.createAuditRecord(
+        "file_upload",
+        fileId,
+        {
+          fileName: `photo-${busId}`,
+          fileType: req.header("content-type") || "image/png",
+          fileSize: buffer.length,
+          uploadedBy: actor(req),
+          relatedRecordType: "bus",
+          relatedRecordId: busId,
+          fileHash,
+          uploadedAt: new Date().toISOString()
+        },
+        req.user?.email,
+        req.user?.role
+      );
+    } catch (err: any) {
+      console.warn("[storage-audit] Bus photo audit skipped.", err.message);
+    }
+
     res.status(201).json(envelope(result, "firebase"));
   },
 
   async uploadBusDocument(req: Request, res: Response) {
     const { busId, docType } = req.params;
+    const buffer = requestBodyBuffer(req.body);
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
+
     const result = await storageService.uploadBusDocument(
       busId,
       docType,
-      requestBodyBuffer(req.body),
+      buffer,
       req.header("content-type") || undefined,
       actor(req)
     );
+
+    // Anchor file audit proof
+    try {
+      const fileId = `file-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      await blockchainAuditService.createAuditRecord(
+        "file_upload",
+        fileId,
+        {
+          fileName: `${docType}-${busId}`,
+          fileType: req.header("content-type") || "application/pdf",
+          fileSize: buffer.length,
+          uploadedBy: actor(req),
+          relatedRecordType: "bus",
+          relatedRecordId: busId,
+          fileHash,
+          uploadedAt: new Date().toISOString()
+        },
+        req.user?.email,
+        req.user?.role
+      );
+    } catch (err: any) {
+      console.warn("[storage-audit] Bus doc audit skipped.", err.message);
+    }
+
     res.status(201).json(envelope(result, "firebase"));
   }
 };

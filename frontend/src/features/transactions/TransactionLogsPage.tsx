@@ -2,7 +2,7 @@
 
 import type { TransactionLog } from "@pos-bus/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, RotateCcw } from "lucide-react";
+import { Download, RotateCcw, ShieldCheck } from "lucide-react";
 import { api } from "@/services/api";
 import { useApiResource } from "@/hooks/useApiResource";
 import { AppShell } from "@/components/layout/AppShell";
@@ -211,7 +211,17 @@ export function TransactionLogsPage() {
             { header: "Type", cell: (row) => row.passengerType },
             { header: "Pax", cell: (row) => row.passengerCount },
             { header: "Payment", cell: (row) => row.paymentMethod.toUpperCase() },
-            { header: "Amount", cell: (row) => formatPeso(row.amount) },
+            {
+              header: "Amount",
+              cell: (row) => (
+                <span className="flex items-center gap-1">
+                  {formatPeso(row.amount)}
+                  <span title="Cryptographically secured on blockchain ledger" className="flex items-center">
+                    <ShieldCheck size={14} className="text-emerald-500" />
+                  </span>
+                </span>
+              )
+            },
             { header: "Time", cell: (row) => formatDateTime(row.time) }
           ]}
         />

@@ -22,7 +22,12 @@ const envSchema = z.object({
   DATABASE_URL: z.string().optional(),
   SQL_SYNC_INTERVAL_MS: z.coerce.number().int().nonnegative().default(60000),
   API_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
-  API_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(160)
+  API_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(160),
+  BLOCKCHAIN_ENABLED: z.coerce.boolean().default(false),
+  BLOCKCHAIN_NETWORK: z.string().default("hardhat"),
+  BLOCKCHAIN_RPC_URL: z.string().optional().default(""),
+  BLOCKCHAIN_PRIVATE_KEY: z.string().optional().default(""),
+  BLOCKCHAIN_CONTRACT_ADDRESS: z.string().optional().default("")
 });
 
 export const env = envSchema.parse(process.env);

@@ -256,6 +256,18 @@ img {
   box-shadow: 0 0 0 7px color-mix(in srgb, var(--amber) 18%, transparent);
 }
 
+.signal-demo svg,
+.signal-checking svg,
+.signal-limited svg {
+  color: var(--amber);
+}
+
+.signal-demo .signal-dot,
+.signal-checking .signal-dot,
+.signal-limited .signal-dot {
+  background: var(--amber);
+}
+
 .loading-bus-image {
   position: absolute;
   left: 0;
@@ -673,12 +685,14 @@ img {
 }
 
 .signal-demo svg,
-.signal-checking svg {
+.signal-checking svg,
+.signal-limited svg {
   color: var(--amber);
 }
 
 .signal-demo .signal-dot,
-.signal-checking .signal-dot {
+.signal-checking .signal-dot,
+.signal-limited .signal-dot {
   background: var(--amber);
 }
 

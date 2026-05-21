@@ -13,9 +13,10 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatPeso, relativeMinutes } from "@/utils/format";
 
-const sourceLabel = (source: "firebase" | "rtdb-rest" | "demo") => {
+const sourceLabel = (source: "firebase" | "rtdb-rest" | "demo" | "supabase") => {
   if (source === "firebase") return "Firebase Admin";
   if (source === "rtdb-rest") return "Realtime DB REST";
+  if (source === "supabase") return "Supabase SQL";
   return "Demo fallback";
 };
 
