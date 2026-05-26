@@ -1,4 +1,4 @@
-# Drive&Go Security Hardening Guide
+# Bus Coro. Security Hardening Guide
 
 This document outlines the whole-system security architecture and defensive controls implemented across the Drive&Go POS Bus Ticketing Simulation Admin Web & Backend system.
 
